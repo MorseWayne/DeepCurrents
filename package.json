@@ -1,10 +1,19 @@
 {
   "name": "deep-currents",
-  "version": "1.0.0",
-  "description": "AI-Powered Macro Intelligence & Global Strategy Engine",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "AI-Powered Macro Intelligence & Global Strategy Engine — Source Tier System | Threat Classification | News Clustering | Trending Detection",
+  "main": "dist/monitor.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "ts-node src/monitor.ts",
+    "build": "tsc",
+    "test": "ts-node src/test-tools.ts",
+    "test:rss": "ts-node src/test-tools.ts rss",
+    "test:classifier": "ts-node src/test-tools.ts classifier",
+    "test:clustering": "ts-node src/test-tools.ts clustering",
+    "test:trending": "ts-node src/test-tools.ts trending",
+    "test:llm": "ts-node src/test-tools.ts llm",
+    "test:feishu": "ts-node src/test-tools.ts feishu",
+    "test:telegram": "ts-node src/test-tools.ts telegram"
   },
   "keywords": [],
   "author": "",
