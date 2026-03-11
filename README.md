@@ -116,6 +116,19 @@ npm start
 3. **每天 08:00**自动合成并投递每日研报（可通过 `CRON_REPORT` 配置）
 4. **每天 03:00**自动清理过期数据（可通过 `CRON_CLEANUP` 配置）
 
+**手动触发全流程并输出每日研报**（采集 → 生成 → 推送 → 终端输出）：
+
+```bash
+npm run report                                    # 完整流程
+npm run report -- --no-push                       # 预览模式：不推送、不标记已报告
+npm run report -- --report-only                   # 仅用已有数据生成（跳过采集）
+npm run report -- --json                          # JSON 格式输出
+npm run report -- --output data/reports/today.md  # 写入文件
+npm run report -- --help                          # 查看帮助
+```
+
+> 日志输出到 stderr，研报输出到 stdout，可通过 `>` 重定向保存，如：`npm run report > report-$(date +%Y%m%d).md`。
+
 ### 5. Docker 部署（可选）
 
 ```bash

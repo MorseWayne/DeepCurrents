@@ -15,7 +15,7 @@ import { ingestHeadlines, detectSpikes, generateTrendingContext, getTrackedTermC
 const logger = pino({ 
   name: 'DeepCurrents', 
   level: 'info', 
-  transport: { target: 'pino-pretty', options: { colorize: true } } 
+  transport: { target: 'pino-pretty', options: { colorize: true, destination: 2 } } 
 });
 
 // ── 通用重试工具（指数退避）──
@@ -40,6 +40,20 @@ async function retryWithBackoff<T>(
     }
   }
   throw lastError;
+}
+
+export interface CollectResult {
+  newItems: number;
+  skippedSources: number;
+  errors: number;
+  spikeCount: number;
+}
+
+export interface ReportResult {
+  report: DailyReport;
+  newsIds: string[];
+  newsCount: number;
+  clusterCount: number;
 }
 
 /**
@@ -102,7 +116,7 @@ export class DeepCurrentsEngine {
     process.exit(0);
   }
 
-  private async collectData() {
+  public async collectData(): Promise<CollectResult> {
     let totalNew = 0;
     let totalSkipped = 0;
     let totalErrors = 0;
@@ -185,45 +199,75 @@ export class DeepCurrentsEngine {
     const dbStats = this.db.getStats();
     logger.info(`[采集完成] 新增 ${totalNew} | 跳过 ${totalSkipped} | 错误 ${totalErrors} | 熔断 ${breakerSummary.onCooldown} | 趋势词 ${getTrackedTermCount()}`);
     logger.info(`[数据库] 总量 ${dbStats.total} | 待报告 ${dbStats.unreported} | 威胁分布: ${JSON.stringify(dbStats.byThreat)}`);
+
+    return { newItems: totalNew, skippedSources: totalSkipped, errors: totalErrors, spikeCount: spikes.length };
   }
 
-  private async generateAndSendReport() {
+  /**
+   * 纯研报生成（不推送、不标记），返回研报及元数据。
+   * 供 CLI 和 cron 共同使用。AI 调用失败时抛出异常。
+   */
+  public async generateReport(): Promise<ReportResult | null> {
     const unreportedNews = this.db.getUnreportedNews();
     if (unreportedNews.length === 0) {
       logger.info("[Reporter] 无新数据，跳过报告生成。");
-      return;
+      return null;
     }
 
+    const itemsForClustering: NewsItemForClustering[] = unreportedNews.map(n => ({
+      id: n.id,
+      title: n.title,
+      url: n.url,
+      content: n.content,
+      source: n.category,
+      sourceTier: n.tier || 4,
+      timestamp: n.timestamp,
+      threat: classifyThreat(n.title),
+    }));
+
+    const clusters = clusterNews(itemsForClustering);
+    logger.info(`[聚类] ${unreportedNews.length} 条新闻 → ${clusters.length} 个聚类事件`);
+
+    const spikes = detectSpikes();
+    const report = await this.ai.generateDailyReport(unreportedNews, clusters, spikes);
+
+    return {
+      report,
+      newsIds: unreportedNews.map(n => n.id),
+      newsCount: unreportedNews.length,
+      clusterCount: clusters.length,
+    };
+  }
+
+  /** 推送研报到已配置的通知渠道（飞书/Telegram），各自带指数退避重试。 */
+  public async deliverReport(report: DailyReport, newsCount: number, clusterCount: number): Promise<void> {
+    await Promise.allSettled([
+      retryWithBackoff(() => this.sendToFeishu(report, newsCount, clusterCount), 'Feishu'),
+      retryWithBackoff(() => this.sendToTelegram(report), 'Telegram'),
+    ]);
+  }
+
+  /** 标记新闻为已报告。 */
+  public markNewsAsReported(ids: string[]): void {
+    this.db.markAsReported(ids);
+  }
+
+  /**
+   * 生成 + 投递 + 标记（供 cron 调度直接使用的便捷方法）。
+   * 内部做 try/catch，保证不会让定时任务崩溃。
+   */
+  public async generateAndSendReport(): Promise<DailyReport | null> {
     try {
-      const itemsForClustering: NewsItemForClustering[] = unreportedNews.map(n => ({
-        id: n.id,
-        title: n.title,
-        url: n.url,
-        content: n.content,
-        source: n.category,
-        sourceTier: n.tier || 4,
-        timestamp: n.timestamp,
-        threat: classifyThreat(n.title),
-      }));
+      const result = await this.generateReport();
+      if (!result) return null;
 
-      const clusters = clusterNews(itemsForClustering);
-      logger.info(`[聚类] ${unreportedNews.length} 条新闻 → ${clusters.length} 个聚类事件`);
-
-      const spikes = detectSpikes();
-
-      const report = await this.ai.generateDailyReport(unreportedNews, clusters, spikes);
-
-      // 并行推送，各自带指数退避重试
-      await Promise.allSettled([
-        retryWithBackoff(() => this.sendToFeishu(report, unreportedNews.length, clusters.length), 'Feishu'),
-        retryWithBackoff(() => this.sendToTelegram(report), 'Telegram'),
-      ]);
-
-      const ids = unreportedNews.map(n => n.id);
-      this.db.markAsReported(ids);
+      await this.deliverReport(result.report, result.newsCount, result.clusterCount);
+      this.markNewsAsReported(result.newsIds);
       logger.info("✅ DeepCurrents 每日研报投递成功。");
+      return result.report;
     } catch (e: any) {
       logger.error(`研报生成/投递失败: ${e.message}`);
+      return null;
     }
   }
 
@@ -308,4 +352,7 @@ export class DeepCurrentsEngine {
   }
 }
 
-new DeepCurrentsEngine().start();
+// 仅在被直接运行时启动常驻引擎，被 import 时（如 run-report）不启动
+if (require.main === module) {
+  new DeepCurrentsEngine().start();
+}

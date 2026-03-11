@@ -5,6 +5,7 @@
   "main": "dist/monitor.js",
   "scripts": {
     "start": "ts-node src/monitor.ts",
+    "report": "ts-node src/run-report.ts",
     "build": "tsc",
     "test": "ts-node src/test-tools.ts",
     "test:rss": "ts-node src/test-tools.ts rss",
@@ -20,12 +21,14 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "@types/node": "^25.4.0",
     "@types/node-cron": "^3.0.11",
     "axios": "^1.13.6",
     "better-sqlite3": "^12.6.2",
     "crypto": "^1.0.1",
     "dotenv": "^17.3.1",
+    "jsdom": "^28.1.0",
     "luxon": "^3.7.2",
     "node-cron": "^4.2.1",
     "p-limit": "^7.3.0",
@@ -37,6 +40,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13"
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/jsdom": "^28.0.0",
+    "@types/mozilla-readability": "^0.2.1"
   }
 }
