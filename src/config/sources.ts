@@ -90,9 +90,9 @@ export const SOURCES: Source[] = [
 
   // ── 🔌 RSSHub 扩展: 地缘 Telegram 频道 ──
   { name: 'NEXTA Live', url: 'https://rsshub.app/telegram/channel/nexta_live', category: 'Geopolitics', tier: 2, type: 'wire', isRssHub: true },
-  { name: 'Rybar', url: 'https://rsshub.app/telegram/channel/ryaboronka', category: 'Geopolitics', tier: 3, type: 'intel', isRssHub: true, propagandaRisk: 'high', stateAffiliated: 'Russia' },
-  { name: 'War Monitor', url: 'https://rsshub.app/telegram/channel/warmonitor3', category: 'Geopolitics', tier: 3, type: 'intel', isRssHub: true },
-  { name: 'South China Sea Wave', url: 'https://rsshub.app/telegram/channel/SouthChinaSeaWave', category: 'AsiaPacific', tier: 3, type: 'intel', isRssHub: true },
+  // { name: 'Rybar', url: 'https://rsshub.app/telegram/channel/ryaboronka', category: 'Geopolitics', tier: 3, type: 'intel', isRssHub: true, propagandaRisk: 'high', stateAffiliated: 'Russia' },
+  // { name: 'War Monitor', url: 'https://rsshub.app/telegram/channel/warmonitor3', category: 'Geopolitics', tier: 3, type: 'intel', isRssHub: true },
+  // { name: 'South China Sea Wave', url: 'https://rsshub.app/telegram/channel/SouthChinaSeaWave', category: 'AsiaPacific', tier: 3, type: 'intel', isRssHub: true },
 
   // ── 🔌 RSSHub 扩展: 中文财经 ──
   { name: '财联社电报', url: 'https://rsshub.app/cls/telegraph', category: 'Economics', tier: 2, type: 'market', isRssHub: true },
@@ -141,7 +141,7 @@ export const SOURCES: Source[] = [
   // 维度5: 亚洲 & 中国情报
   { name: 'Wu Blockchain', url: 'https://rsshub.app/twitter/user/WuBlockchain', category: 'AsiaPacific', tier: 2, type: 'intel', isRssHub: true, note: '中国金融政策双语快讯' },
   { name: 'Dovey Wan', url: 'https://rsshub.app/twitter/user/DoveyWan', category: 'AsiaPacific', tier: 3, type: 'intel', isRssHub: true, note: '中国市场跨文化洞察' },
-  { name: 'SlowMist余弦', url: 'https://rsshub.app/twitter/user/eaboricua', category: 'Cyber', tier: 3, type: 'intel', isRssHub: true, note: '链上安全事件与漏洞预警' },
+  // { name: 'SlowMist余弦', url: 'https://rsshub.app/twitter/user/eaboricua', category: 'Cyber', tier: 3, type: 'intel', isRssHub: true, note: '链上安全事件与漏洞预警' },
 
   // 维度6: 链上宏观数据
   { name: 'Glassnode', url: 'https://rsshub.app/twitter/user/glassnode', category: 'Economics', tier: 3, type: 'market', isRssHub: true, note: '链上宏观指标与资金流图表' },

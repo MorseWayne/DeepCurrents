@@ -26,6 +26,12 @@ function envStr(key: string, fallback: string): string {
   return process.env[key] || fallback;
 }
 
+function envBool(key: string, fallback: boolean): boolean {
+  const v = process.env[key];
+  if (!v) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(v.toLowerCase());
+}
+
 export const CONFIG = {
   // ── Cron 调度 ──
   CRON_COLLECT: envStr('CRON_COLLECT', '0 * * * *'),
@@ -42,7 +48,7 @@ export const CONFIG = {
 
   // ── AI ──
   AI_TIMEOUT_MS: envInt('AI_TIMEOUT_MS', 90000),
-  AI_MAX_CONTEXT_TOKENS: envInt('AI_MAX_CONTEXT_TOKENS', 8000),
+  AI_MAX_CONTEXT_TOKENS: envInt('AI_MAX_CONTEXT_TOKENS', 16000),
 
   // ── 标题去重 ──
   DEDUP_SIMILARITY_THRESHOLD: envFloat('DEDUP_SIMILARITY_THRESHOLD', 0.55),
@@ -62,4 +68,11 @@ export const CONFIG = {
   // ── 通知推送 ──
   NOTIFY_MAX_RETRIES: envInt('NOTIFY_MAX_RETRIES', 3),
   NOTIFY_BASE_DELAY_MS: envInt('NOTIFY_BASE_DELAY_MS', 1000),
+
+  // ── 日志 ──
+  LOG_LEVEL: envStr('LOG_LEVEL', 'info'),
+  LOG_PRETTY: envBool('LOG_PRETTY', process.env.NODE_ENV !== 'production'),
+  LOG_TO_FILE: envBool('LOG_TO_FILE', false),
+  LOG_FILE_PATH: envStr('LOG_FILE_PATH', 'logs/deepcurrents.log'),
+  LOG_TO_STDERR: envBool('LOG_TO_STDERR', true),
 } as const;

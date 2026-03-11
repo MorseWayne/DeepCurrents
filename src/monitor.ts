@@ -1,6 +1,5 @@
 import Parser from 'rss-parser';
 import pLimit from 'p-limit';
-import pino from 'pino';
 import cron, { ScheduledTask } from 'node-cron';
 import axios from 'axios';
 import { CONFIG } from './config/settings';
@@ -10,14 +9,11 @@ import { SOURCES, Source, resolveSourceUrl } from './config/sources';
 import { classifyThreat, THREAT_LABELS, ThreatClassification } from './services/classifier';
 import { RSSCircuitBreaker } from './services/circuit-breaker';
 import { clusterNews, ClusteredEvent, NewsItemForClustering } from './services/clustering';
-import { ingestHeadlines, detectSpikes, generateTrendingContext, getTrackedTermCount } from './services/trending';
+import { ingestHeadlines, detectSpikes, getTrackedTermCount } from './services/trending';
 import { Extractor } from './utils/extractor';
+import { getLogger } from './utils/logger';
 
-const logger = pino({ 
-  name: 'DeepCurrents', 
-  level: 'info', 
-  transport: { target: 'pino-pretty', options: { colorize: true, destination: 2 } } 
-});
+const logger = getLogger('engine');
 
 // ── 通用重试工具（指数退避）──
 
@@ -55,6 +51,7 @@ export interface ReportResult {
   newsIds: string[];
   newsCount: number;
   clusterCount: number;
+  clusters: ClusteredEvent[];
 }
 
 export interface DeliveryResult {
@@ -83,7 +80,7 @@ export class DeepCurrentsEngine {
 
   public start() {
     logger.info("╔══════════════════════════════════════════════════════════╗");
-    logger.info("║     🌊 DeepCurrents Engine v2.1 — 宏观情报引擎         ║");
+    logger.info("║     🌊 DeepCurrents Engine v2.2 — 宏观情报引擎         ║");
     logger.info("║     Source Tier System | Threat Classification          ║");
     logger.info("║     News Clustering | Trending Detection                ║");
     logger.info("╚══════════════════════════════════════════════════════════╝");
@@ -254,6 +251,7 @@ export class DeepCurrentsEngine {
       newsIds: unreportedNews.map(n => n.id),
       newsCount: unreportedNews.length,
       clusterCount: clusters.length,
+      clusters,
     };
   }
 
@@ -315,14 +313,37 @@ export class DeepCurrentsEngine {
     const webhookUrl = process.env.FEISHU_WEBHOOK;
     if (!webhookUrl) return;
 
-    let mdContent = `**🌊 核心主线 | Executive Summary**\n${report.executiveSummary}\n\n`;
+    let mdContent = '';
+
+    if (report.intelligenceDigest && report.intelligenceDigest.length > 0) {
+      mdContent += `**📋 情报摘要 | Intelligence Digest**\n`;
+      const impIcon: Record<string, string> = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' };
+      const credLabel: Record<string, string> = { high: '✅高', medium: '⚠️中', low: '❓低' };
+      for (const [i, item] of report.intelligenceDigest.entries()) {
+        const imp = impIcon[item.importance] ?? '⚪';
+        const cred = credLabel[item.credibility] ?? '❓';
+        const sources = item.sources.map(s => `${s.name}(T${s.tier})`).join('、');
+        mdContent += `**${i+1}. ${imp} ${item.content}**\n`;
+        mdContent += `  来源: ${sources} | 可信度: ${cred}\n`;
+        mdContent += `  ${item.credibilityReason}\n\n`;
+      }
+    }
+
+    mdContent += `**🌊 核心主线 | Executive Summary**\n${report.executiveSummary}\n\n`;
     
     mdContent += `**🌍 重大事件 | Key Events** *(${clusterCount} 个聚类事件)*\n`;
     report.globalEvents.forEach((e, i) => {
       const threatIcon = e.threatLevel ? (THREAT_LABELS[e.threatLevel as keyof typeof THREAT_LABELS] || '') + ' ' : '';
-      mdContent += `${i+1}. ${threatIcon}**${e.title}**: ${e.detail}\n`;
+      mdContent += `**${i+1}. ${threatIcon}${e.title}**\n${e.detail}\n\n`;
     });
-    mdContent += `\n`;
+
+    if (report.keyDataPoints && report.keyDataPoints.length > 0) {
+      mdContent += `**📊 关键数据 | Key Data Points**\n`;
+      for (const dp of report.keyDataPoints) {
+        mdContent += `- **${dp.metric}**: ${dp.value} — ${dp.implication}\n`;
+      }
+      mdContent += `\n`;
+    }
 
     if (report.trendingAlerts && report.trendingAlerts.length > 0) {
       mdContent += `**📈 趋势告警 | Trending Alerts**\n`;
@@ -333,20 +354,33 @@ export class DeepCurrentsEngine {
       mdContent += `\n`;
     }
 
+    if (report.geopoliticalBriefing) {
+      mdContent += `**🌐 地缘政治简报 | Geopolitical Briefing**\n${report.geopoliticalBriefing}\n\n`;
+    }
+
     mdContent += `**📈 宏观趋势深度研判 | Deep Insights**\n${report.economicAnalysis}\n\n`;
 
     mdContent += `**💼 资产配置与投资风向 | Investment Strategy**\n`;
     report.investmentTrends.forEach(t => {
       const icon = t.trend === 'Bullish' ? '🟢 看涨' : t.trend === 'Bearish' ? '🔴 看跌' : '⚪ 中性';
       const conf = t.confidence ? ` (${t.confidence}%)` : '';
-      mdContent += `- **${t.assetClass}** (${icon}${conf}): ${t.rationale}\n`;
+      const tf = t.timeframe ? ` [${t.timeframe}]` : '';
+      mdContent += `- **${t.assetClass}** (${icon}${conf}${tf}): ${t.rationale}\n`;
     });
 
     if (report.riskAssessment) {
       mdContent += `\n**⚠️ 风险评估 | Risk Assessment**\n${report.riskAssessment}\n`;
     }
+
+    if (report.watchlist && report.watchlist.length > 0) {
+      mdContent += `\n**👁 监控清单 | Watchlist**\n`;
+      for (const w of report.watchlist) {
+        const tf = w.timeframe ? ` ⏱${w.timeframe}` : '';
+        mdContent += `- **${w.item}**${tf}: ${w.reason}\n`;
+      }
+    }
     
-    mdContent += `\n--- \n*DeepCurrents Intelligence (v2.1) | 样本源: ${newsCount} 条 → ${clusterCount} 事件 | ${report.date}*`;
+    mdContent += `\n--- \n*DeepCurrents Intelligence (v2.2) | 样本源: ${newsCount} 条 → ${clusterCount} 事件 | ${report.date}*`;
 
     const card = {
       msg_type: "interactive",
@@ -369,19 +403,53 @@ export class DeepCurrentsEngine {
     if (!token || !chatId) return;
 
     let text = `🌊 *DeepCurrents Daily Intelligence*\n📅 ${report.date}\n\n`;
+
+    if (report.intelligenceDigest && report.intelligenceDigest.length > 0) {
+      const impIcon: Record<string, string> = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' };
+      const credLabel: Record<string, string> = { high: '✅', medium: '⚠️', low: '❓' };
+      text += `*📋 情报摘要:*\n`;
+      for (const [i, item] of report.intelligenceDigest.slice(0, 8).entries()) {
+        const imp = impIcon[item.importance] ?? '⚪';
+        const cred = credLabel[item.credibility] ?? '❓';
+        const sources = item.sources.map(s => `${s.name}`).join('/');
+        text += `${imp} *${item.content}*\n  ${cred} ${sources}\n`;
+      }
+      text += `\n`;
+    }
+
     text += `*核心主线:* ${report.executiveSummary}\n\n`;
 
     text += `*📊 重大事件:*\n`;
     report.globalEvents.slice(0, 5).forEach((e, i) => {
-      text += `${i+1}. *${e.title}*: ${e.detail.substring(0, 100)}...\n`;
+      text += `${i+1}\\. *${e.title}*: ${e.detail.substring(0, 150)}...\n`;
     });
     text += `\n`;
+
+    if (report.keyDataPoints && report.keyDataPoints.length > 0) {
+      text += `*📋 关键数据:*\n`;
+      for (const dp of report.keyDataPoints.slice(0, 5)) {
+        text += `• *${dp.metric}*: ${dp.value}\n`;
+      }
+      text += `\n`;
+    }
 
     text += `*💼 资产研判:*\n`;
     report.investmentTrends.forEach(t => {
       const icon = t.trend === 'Bullish' ? '📈' : t.trend === 'Bearish' ? '📉' : '➡️';
-      text += `${icon} *${t.assetClass}* (${t.trend}): ${t.rationale.substring(0, 80)}...\n`;
+      const conf = t.confidence ? ` ${t.confidence}%` : '';
+      text += `${icon} *${t.assetClass}* (${t.trend}${conf}): ${t.rationale.substring(0, 100)}...\n`;
     });
+
+    if (report.riskAssessment) {
+      text += `\n*⚠️ 风险评估:*\n${report.riskAssessment.substring(0, 300)}...\n`;
+    }
+
+    if (report.watchlist && report.watchlist.length > 0) {
+      text += `\n*👁 关注:*\n`;
+      for (const w of report.watchlist.slice(0, 3)) {
+        text += `• ${w.item}\n`;
+      }
+    }
 
     const url = `https://api.telegram.org/bot${token}/sendMessage`;
     await axios.post(url, {

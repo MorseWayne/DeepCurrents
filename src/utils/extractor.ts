@@ -1,6 +1,9 @@
 import axios from 'axios';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
+import { getLogger } from './logger';
+
+const logger = getLogger('extractor');
 
 /**
  * 全文提取工具 (Full-text Extractor)
@@ -49,7 +52,7 @@ export class Extractor {
         title: article.title || '',
       };
     } catch (error: any) {
-      console.error(`[Extractor] 抓取全文失败 ${url}: ${error.message}`);
+      logger.debug(`[Extractor] 抓取全文失败 ${url}: ${error.message}`);
       return null;
     }
   }

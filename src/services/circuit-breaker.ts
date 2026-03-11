@@ -8,9 +8,9 @@
  * - 内存缓存 + TTL 管理
  */
 
-import pino from 'pino';
+import { getLogger } from '../utils/logger';
 
-const logger = pino({ name: 'CircuitBreaker', level: 'info', transport: { target: 'pino-pretty', options: { colorize: true } } });
+const logger = getLogger('circuit-breaker');
 
 export interface CircuitBreakerState {
   failureCount: number;

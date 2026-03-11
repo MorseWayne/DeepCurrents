@@ -147,17 +147,31 @@ export function clusterNews(
 
 /**
  * 生成聚类摘要（用于 AI 上下文）
+ *
+ * 增强版：除标题外还附带信源细节和正文摘要，
+ * 帮助 AI 在事件级别做更深入的分析。
  */
 export function generateClusterContext(clusters: ClusteredEvent[]): string {
   if (clusters.length === 0) return '';
 
-  const lines: string[] = ['[CLUSTERED EVENTS]'];
+  const lines: string[] = ['[CLUSTERED EVENTS — Multi-source confirmed macro events]'];
   const top = clusters.slice(0, 15);
 
   for (const cluster of top) {
-    const sourceInfo = cluster.sourceCount > 1 ? ` (${cluster.sourceCount} sources)` : '';
+    const sourceInfo = cluster.sourceCount > 1 ? ` (${cluster.sourceCount} independent sources)` : '';
     const threatTag = cluster.threat.level !== 'info' ? ` [${cluster.threat.level.toUpperCase()}]` : '';
-    lines.push(`- ${cluster.primaryTitle}${threatTag}${sourceInfo} via ${cluster.primarySource}`);
+    lines.push(`- ${cluster.primaryTitle}${threatTag}${sourceInfo}`);
+
+    if (cluster.sources.length > 1) {
+      const sourceNames = cluster.sources.slice(0, 4).map(s => `${s.name}(T${s.tier})`).join(', ');
+      lines.push(`  Sources: ${sourceNames}`);
+    }
+
+    const primaryItem = cluster.allItems[0];
+    if (primaryItem?.content && primaryItem.content.length > 80) {
+      const excerpt = primaryItem.content.substring(0, 250).replace(/\s+/g, ' ').trim();
+      lines.push(`  Context: ${excerpt}`);
+    }
   }
 
   return lines.join('\n');

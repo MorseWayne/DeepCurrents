@@ -9,11 +9,11 @@
  * - 冷却期避免重复告警
  */
 
-import pino from 'pino';
 import { CONFIG } from '../config/settings';
 import { tokenizeToArray, stripSourceAttribution } from '../utils/tokenizer';
+import { getLogger } from '../utils/logger';
 
-const logger = pino({ name: 'TrendingKeywords', level: 'info', transport: { target: 'pino-pretty', options: { colorize: true } } });
+const logger = getLogger('trending');
 
 // ── 时间窗口常量 ──
 const HOUR_MS = 60 * 60 * 1000;
@@ -247,7 +247,11 @@ export function detectSpikes(config?: Partial<TrendingConfig>): TrendingSpike[] 
     });
   }
 
-  return spikes.sort((a, b) => b.count - a.count);
+  const sorted = spikes.sort((a, b) => b.count - a.count);
+  if (sorted.length > 0) {
+    logger.debug(`[Trending] 发现 ${sorted.length} 个飙升关键词`);
+  }
+  return sorted;
 }
 
 /**
