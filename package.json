@@ -9,6 +9,7 @@
     "build": "tsc",
     "test": "ts-node src/test-tools.ts",
     "test:rss": "ts-node src/test-tools.ts rss",
+    "test:verify": "ts-node src/test-sources.ts",
     "test:classifier": "ts-node src/test-tools.ts classifier",
     "test:clustering": "ts-node src/test-tools.ts clustering",
     "test:trending": "ts-node src/test-tools.ts trending",

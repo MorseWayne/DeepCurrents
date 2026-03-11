@@ -218,35 +218,69 @@ function shouldEscalateToCritical(lower: string, matchCat: EventCategory): boole
 }
 
 /**
- * 对新闻标题进行威胁分类
+ * 对新闻标题和正文进行威胁分类
  * 返回威胁等级、事件类别和置信度
  */
-export function classifyThreat(title: string): ThreatClassification {
-  const lower = title.toLowerCase();
+export function classifyThreat(title: string, content?: string): ThreatClassification {
+  const titleLower = title.toLowerCase();
+  const contentLower = content ? content.slice(0, 3000).toLowerCase() : "";
 
-  // Phase 1: 排除非相关内容
-  if (EXCLUSIONS.some(ex => lower.includes(ex))) {
+  // Phase 1: 排除非相关内容（仅对标题，正文包含噪音更正常）
+  if (EXCLUSIONS.some(ex => titleLower.includes(ex))) {
     return { level: 'info', category: 'general', confidence: 0.3 };
   }
 
-  // Phase 2: 级联关键词匹配
-  let match = matchKeywords(lower, CRITICAL_KEYWORDS);
-  if (match) return { level: 'critical', category: match.category, confidence: 0.9, matchedKeyword: match.keyword };
+  // Helper: 执行层级匹配
+  const runMatch = (text: string): { level: ThreatLevel; match: any } | null => {
+    let match = matchKeywords(text, CRITICAL_KEYWORDS);
+    if (match) return { level: 'critical', match };
 
-  match = matchKeywords(lower, HIGH_KEYWORDS);
-  if (match) {
-    // Phase 3: 复合升级规则
-    if (shouldEscalateToCritical(lower, match.category)) {
-      return { level: 'critical', category: match.category, confidence: 0.85, matchedKeyword: match.keyword };
+    match = matchKeywords(text, HIGH_KEYWORDS);
+    if (match) {
+      if (shouldEscalateToCritical(text, match.category)) {
+        return { level: 'critical', match };
+      }
+      return { level: 'high', match };
     }
-    return { level: 'high', category: match.category, confidence: 0.8, matchedKeyword: match.keyword };
+
+    match = matchKeywords(text, MEDIUM_KEYWORDS);
+    if (match) return { level: 'medium', match };
+
+    match = matchKeywords(text, LOW_KEYWORDS);
+    if (match) return { level: 'low', match };
+
+    return null;
+  };
+
+  // Phase 2: 首先尝试标题匹配
+  const titleResult = runMatch(titleLower);
+  
+  // Phase 3: 如果有正文，尝试正文匹配
+  let contentResult = null;
+  if (contentLower) {
+    contentResult = runMatch(contentLower);
   }
 
-  match = matchKeywords(lower, MEDIUM_KEYWORDS);
-  if (match) return { level: 'medium', category: match.category, confidence: 0.7, matchedKeyword: match.keyword };
+  // Phase 4: 决策逻辑
+  // 如果正文匹配到了更高的威胁等级，采纳正文结果，但置信度略降（以防是背景提及）
+  if (contentResult && (!titleResult || THREAT_PRIORITY[contentResult.level] > THREAT_PRIORITY[titleResult.level])) {
+    return { 
+      level: contentResult.level, 
+      category: contentResult.match.category, 
+      confidence: 0.75, // 正文匹配置信度略低于标题
+      matchedKeyword: contentResult.match.keyword 
+    };
+  }
 
-  match = matchKeywords(lower, LOW_KEYWORDS);
-  if (match) return { level: 'low', category: match.category, confidence: 0.6, matchedKeyword: match.keyword };
+  // 否则采纳标题匹配结果
+  if (titleResult) {
+    return { 
+      level: titleResult.level, 
+      category: titleResult.match.category, 
+      confidence: 0.9, 
+      matchedKeyword: titleResult.match.keyword 
+    };
+  }
 
   return { level: 'info', category: 'general', confidence: 0.3 };
 }

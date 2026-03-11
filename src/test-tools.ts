@@ -2,7 +2,7 @@ import Parser from 'rss-parser';
 import axios from 'axios';
 import * as dotenv from 'dotenv';
 import pino from 'pino';
-import { SOURCES, getSourceTier, getSourcePropagandaRisk } from './config/sources';
+import { SOURCES, getSourceTier, getSourcePropagandaRisk, resolveSourceUrl } from './config/sources';
 import { classifyThreat, THREAT_LABELS } from './services/classifier';
 import { RSSCircuitBreaker } from './services/circuit-breaker';
 import { ingestHeadlines, detectSpikes, getTrackedTermCount, resetTrendingState } from './services/trending';
@@ -27,26 +27,34 @@ export class TestSuite {
     logger.info(`已配置 ${SOURCES.length} 个源 (T1:${SOURCES.filter(s=>s.tier===1).length} T2:${SOURCES.filter(s=>s.tier===2).length} T3:${SOURCES.filter(s=>s.tier===3).length} T4:${SOURCES.filter(s=>s.tier===4).length})`);
 
     const breaker = new RSSCircuitBreaker({ maxFailures: 2, cooldownMs: 60000 });
-    const sampleSources = SOURCES.slice(0, 8); // 选取前 8 个
+    const results = { passed: 0, failed: 0, cooldown: 0 };
 
-    for (const source of sampleSources) {
+    for (const source of SOURCES) {
+      const url = resolveSourceUrl(source);
+      const typeLabel = source.isRssHub ? '[RSSHub]' : '[RSS]';
+
       if (breaker.isOnCooldown(source.name)) {
-        logger.warn(`⏸️ [RSS] T${source.tier} ${source.name}: 已熔断，跳过`);
+        logger.warn(`⏸️ ${typeLabel} T${source.tier} ${source.name}: 已熔断，跳过`);
+        results.cooldown++;
         continue;
       }
       try {
-        const feed = await this.parser.parseURL(source.url);
+        const feed = await this.parser.parseURL(url);
         breaker.recordSuccess(source.name);
         const riskLabel = getSourcePropagandaRisk(source.name) !== 'low' 
           ? ` ⚠️ 风险:${getSourcePropagandaRisk(source.name)}` : '';
-        logger.info(`✅ [RSS] T${source.tier} ${source.name}: ${feed.items.length} 条新闻${riskLabel}`);
+        logger.info(`✅ ${typeLabel} T${source.tier} ${source.name}: ${feed.items.length} 条新闻${riskLabel}`);
+        results.passed++;
       } catch (e: any) {
         breaker.recordFailure(source.name);
-        logger.error(`❌ [RSS] T${source.tier} ${source.name} 失败: ${e.message}`);
+        logger.error(`❌ ${typeLabel} T${source.tier} ${source.name} 失败: ${e.message}`);
+        results.failed++;
       }
     }
     
     const summary = breaker.getSummary();
+    logger.info(`--- RSS 测试报告 ---`);
+    logger.info(`总计: ${SOURCES.length} | 通过: ${results.passed} | 失败: ${results.failed} | 熔断跳过: ${results.cooldown}`);
     logger.info(`[熔断器] 跟踪: ${summary.totalSources} | 冷却中: ${summary.onCooldown}`);
   }
 
@@ -250,6 +258,7 @@ export class TestSuite {
     console.log("\n");
     await this.testTelegram();
     logger.info("--- 全部集成测试完成 ---");
+    process.exit(0);
   }
 }
 
@@ -309,6 +318,7 @@ if (require.main === module) {
         console.log('\n');
       }
       logger.info('--- 指定测试完成 ---');
+      process.exit(0);
     })();
   }
 }

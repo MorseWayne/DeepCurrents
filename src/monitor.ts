@@ -6,11 +6,12 @@ import axios from 'axios';
 import { CONFIG } from './config/settings';
 import { AIService, DailyReport } from './services/ai.service';
 import { DBService } from './services/db.service';
-import { SOURCES, Source } from './config/sources';
+import { SOURCES, Source, resolveSourceUrl } from './config/sources';
 import { classifyThreat, THREAT_LABELS, ThreatClassification } from './services/classifier';
 import { RSSCircuitBreaker } from './services/circuit-breaker';
 import { clusterNews, ClusteredEvent, NewsItemForClustering } from './services/clustering';
 import { ingestHeadlines, detectSpikes, generateTrendingContext, getTrackedTermCount } from './services/trending';
+import { Extractor } from './utils/extractor';
 
 const logger = pino({ 
   name: 'DeepCurrents', 
@@ -54,6 +55,11 @@ export interface ReportResult {
   newsIds: string[];
   newsCount: number;
   clusterCount: number;
+}
+
+export interface DeliveryResult {
+  attemptedChannels: number;
+  succeededChannels: number;
 }
 
 /**
@@ -131,7 +137,8 @@ export class DeepCurrentsEngine {
       }
 
       try {
-        const feed = await this.parser.parseURL(source.url);
+        const url = resolveSourceUrl(source);
+        const feed = await this.parser.parseURL(url);
         let newCount = 0;
 
         for (const item of feed.items) {
@@ -140,12 +147,23 @@ export class DeepCurrentsEngine {
           if (this.db.hasNews(item.link)) continue;
           if (this.db.hasSimilarTitle(item.title)) continue;
 
-          const threat = classifyThreat(item.title);
+          let finalContent = item.contentSnippet || item.content || "";
+
+          if (source.tier <= 2 && item.link) {
+            try {
+              const fullText = await Extractor.extract(item.link, 5000);
+              if (fullText && fullText.content.length > finalContent.length) {
+                finalContent = fullText.content;
+              }
+            } catch (_) { /* 提取失败保持摘要 */ }
+          }
+
+          const threat = classifyThreat(item.title, finalContent);
 
           this.db.saveNews(
             item.link,
             item.title,
-            item.contentSnippet || item.content || "",
+            finalContent,
             source.name,
             {
               tier: source.tier,
@@ -222,7 +240,7 @@ export class DeepCurrentsEngine {
       source: n.category,
       sourceTier: n.tier || 4,
       timestamp: n.timestamp,
-      threat: classifyThreat(n.title),
+      threat: classifyThreat(n.title, n.content),
     }));
 
     const clusters = clusterNews(itemsForClustering);
@@ -240,11 +258,26 @@ export class DeepCurrentsEngine {
   }
 
   /** 推送研报到已配置的通知渠道（飞书/Telegram），各自带指数退避重试。 */
-  public async deliverReport(report: DailyReport, newsCount: number, clusterCount: number): Promise<void> {
-    await Promise.allSettled([
-      retryWithBackoff(() => this.sendToFeishu(report, newsCount, clusterCount), 'Feishu'),
-      retryWithBackoff(() => this.sendToTelegram(report), 'Telegram'),
-    ]);
+  public async deliverReport(report: DailyReport, newsCount: number, clusterCount: number): Promise<DeliveryResult> {
+    const tasks: Array<Promise<void>> = [];
+    const hasFeishu = !!process.env.FEISHU_WEBHOOK;
+    const hasTelegram = !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+
+    if (hasFeishu) {
+      tasks.push(retryWithBackoff(() => this.sendToFeishu(report, newsCount, clusterCount), 'Feishu'));
+    }
+    if (hasTelegram) {
+      tasks.push(retryWithBackoff(() => this.sendToTelegram(report), 'Telegram'));
+    }
+
+    if (tasks.length === 0) {
+      logger.warn('[Notifier] 未配置飞书或 Telegram，跳过推送。');
+      return { attemptedChannels: 0, succeededChannels: 0 };
+    }
+
+    const settled = await Promise.allSettled(tasks);
+    const succeededChannels = settled.filter(r => r.status === 'fulfilled').length;
+    return { attemptedChannels: tasks.length, succeededChannels };
   }
 
   /** 标记新闻为已报告。 */
@@ -261,9 +294,16 @@ export class DeepCurrentsEngine {
       const result = await this.generateReport();
       if (!result) return null;
 
-      await this.deliverReport(result.report, result.newsCount, result.clusterCount);
-      this.markNewsAsReported(result.newsIds);
-      logger.info("✅ DeepCurrents 每日研报投递成功。");
+      const delivery = await this.deliverReport(result.report, result.newsCount, result.clusterCount);
+      const noChannelsConfigured = delivery.attemptedChannels === 0;
+      const hasSuccessfulDelivery = delivery.succeededChannels > 0;
+
+      if (noChannelsConfigured || hasSuccessfulDelivery) {
+        this.markNewsAsReported(result.newsIds);
+        logger.info("✅ DeepCurrents 每日研报投递完成。");
+      } else {
+        logger.error("❌ DeepCurrents 每日研报投递全部失败，保留未报告状态以便下次重试。");
+      }
       return result.report;
     } catch (e: any) {
       logger.error(`研报生成/投递失败: ${e.message}`);

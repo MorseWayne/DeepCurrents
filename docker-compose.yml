@@ -1,0 +1,38 @@
+services:
+  # 🌊 DeepCurrents 情报引擎
+  deep-currents:
+    build:
+      context: .
+      network: host
+    container_name: deep-currents
+    restart: always
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - NODE_ENV=production
+      - RSSHUB_BASE_URL=http://rsshub:1200
+    depends_on:
+      - rsshub
+
+  # 🔌 RSSHub 万能 RSS 转换器
+  rsshub:
+    image: diygod/rsshub:latest
+    container_name: rsshub
+    restart: always
+    ports:
+      - "1200:1200"
+    environment:
+      - NODE_ENV=production
+      - CACHE_TYPE=redis
+      - REDIS_URL=redis://redis:6379/
+      - TWITTER_AUTH_TOKEN=${TWITTER_AUTH_TOKEN:-}
+    depends_on:
+      - redis
+
+  # 🧠 Redis 缓存（为 RSSHub 提速并防封）
+  redis:
+    image: redis:alpine
+    container_name: rsshub-redis
+    restart: always
+
