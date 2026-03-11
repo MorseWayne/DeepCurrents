@@ -10,6 +10,8 @@
  */
 
 import pino from 'pino';
+import { CONFIG } from '../config/settings';
+import { tokenizeToArray, stripSourceAttribution } from '../utils/tokenizer';
 
 const logger = pino({ name: 'TrendingKeywords', level: 'info', transport: { target: 'pino-pretty', options: { colorize: true } } });
 
@@ -20,8 +22,6 @@ const ROLLING_WINDOW_MS = 2 * HOUR_MS;
 const BASELINE_WINDOW_MS = 7 * DAY_MS;
 const BASELINE_REFRESH_MS = HOUR_MS;
 const SPIKE_COOLDOWN_MS = 30 * 60 * 1000;
-const MAX_TRACKED_TERMS = 5000;
-const MIN_TOKEN_LENGTH = 3;
 const MIN_SPIKE_SOURCE_COUNT = 2;
 
 // ── 类型定义 ──
@@ -59,18 +59,7 @@ const DEFAULT_CONFIG: TrendingConfig = {
   spikeMultiplier: 3,
 };
 
-// ── 停用词 ──
-const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has',
-  'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may',
-  'might', 'can', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
-  'as', 'and', 'but', 'or', 'not', 'it', 'its', 'he', 'she', 'they', 'we',
-  'you', 'that', 'this', 'said', 'says', 'new', 'news', 'report', 'reports',
-  'up', 'out', 'over', 'about', 'also', 'just', 'than', 'more', 'very', 'too',
-  'after', 'before', 'being', 'into', 'how', 'why', 'what', 'when', 'where',
-  'who', 'which', 'some', 'all', 'any', 'each', 'other', 'such', 'only',
-  'own', 'same', 'so', 'then', 'there', 'these', 'those', 'between', 'through',
-]);
+// 停用词由共享分词器 (utils/tokenizer) 统一管理
 
 // ── 实体提取正则 ──
 const CVE_PATTERN = /CVE-\d{4}-\d{4,}/gi;
@@ -83,8 +72,9 @@ const LEADER_NAMES = [
 ];
 
 // ── 全局状态 ──
+// 使用 Map 替代 Set，记录插入时间戳以支持 LRU 淘汰
 const termFrequency = new Map<string, TermRecord>();
-const seenHeadlines = new Set<string>();
+const seenHeadlines = new Map<string, number>();
 let lastBaselineRefreshMs = 0;
 
 function toTermKey(term: string): string {
@@ -118,24 +108,16 @@ export function extractEntities(text: string): string[] {
 }
 
 /**
- * 分词
+ * 分词（委托给共享多语言分词器）
  */
-function tokenize(text: string): string[] {
-  // 去掉末尾的 " - SourceName" 归属
-  const idx = text.lastIndexOf(' - ');
-  const clean = idx !== -1 ? text.slice(0, idx) : text;
-
-  return clean
-    .toLowerCase()
-    .replace(/[^a-z0-9\s'-]/g, ' ')
-    .split(/\s+/)
-    .filter(t => t.length >= MIN_TOKEN_LENGTH && !STOP_WORDS.has(t));
+function localTokenize(text: string): string[] {
+  return tokenizeToArray(stripSourceAttribution(text), 3);
 }
 
 /**
- * 清理过期数据
+ * 清理过期的 termFrequency 条目
  */
-function pruneOldState(now: number): void {
+function pruneTermFrequency(now: number): void {
   for (const [term, record] of termFrequency) {
     record.timestamps = record.timestamps.filter(ts => now - ts <= BASELINE_WINDOW_MS);
     if (record.timestamps.length === 0) {
@@ -143,8 +125,7 @@ function pruneOldState(now: number): void {
     }
   }
 
-  // 限制总量
-  if (termFrequency.size > MAX_TRACKED_TERMS) {
+  if (termFrequency.size > CONFIG.TRENDING_MAX_TRACKED_TERMS) {
     const ordered = Array.from(termFrequency.entries())
       .map(([term, record]) => ({
         term,
@@ -153,9 +134,25 @@ function pruneOldState(now: number): void {
       .sort((a, b) => a.latest - b.latest);
 
     for (const { term } of ordered) {
-      if (termFrequency.size <= MAX_TRACKED_TERMS) break;
+      if (termFrequency.size <= CONFIG.TRENDING_MAX_TRACKED_TERMS) break;
       termFrequency.delete(term);
     }
+  }
+}
+
+/**
+ * 清理 seenHeadlines 防止无限增长
+ * Map 保持插入顺序，从头部（最旧）开始删除
+ */
+function pruneSeenHeadlines(): void {
+  if (seenHeadlines.size <= CONFIG.TRENDING_MAX_SEEN_HEADLINES) return;
+
+  const excess = seenHeadlines.size - CONFIG.TRENDING_MAX_SEEN_HEADLINES;
+  let removed = 0;
+  for (const key of seenHeadlines.keys()) {
+    if (removed >= excess) break;
+    seenHeadlines.delete(key);
+    removed++;
   }
 }
 
@@ -166,7 +163,7 @@ function maybeRefreshBaselines(now: number): void {
   if (now - lastBaselineRefreshMs < BASELINE_REFRESH_MS) return;
   for (const record of termFrequency.values()) {
     const weekCount = record.timestamps.filter(ts => now - ts <= BASELINE_WINDOW_MS).length;
-    record.baseline7d = weekCount / 7; // 日均
+    record.baseline7d = weekCount / 7;
   }
   lastBaselineRefreshMs = now;
 }
@@ -184,10 +181,9 @@ export function ingestHeadlines(headlines: TrendingHeadlineInput[]): void {
 
     const key = headlineKey(headline);
     if (seenHeadlines.has(key)) continue;
-    seenHeadlines.add(key);
+    seenHeadlines.set(key, now);
 
-    // 分词 + 实体提取
-    const tokens = tokenize(headline.title);
+    const tokens = localTokenize(headline.title);
     const entities = extractEntities(headline.title);
     const allTerms = [...tokens, ...entities];
 
@@ -212,7 +208,8 @@ export function ingestHeadlines(headlines: TrendingHeadlineInput[]): void {
     }
   }
 
-  pruneOldState(now);
+  pruneTermFrequency(now);
+  pruneSeenHeadlines();
   maybeRefreshBaselines(now);
 }
 
@@ -246,7 +243,7 @@ export function detectSpikes(config?: Partial<TrendingConfig>): TrendingSpike[] 
       baseline,
       multiplier,
       uniqueSources: record.sources.size,
-      headlines: [], // 可扩展为存储关联标题
+      headlines: [],
     });
   }
 
@@ -269,16 +266,10 @@ export function generateTrendingContext(): string {
   return lines.join('\n');
 }
 
-/**
- * 获取跟踪的关键词总数（用于监控）
- */
 export function getTrackedTermCount(): number {
   return termFrequency.size;
 }
 
-/**
- * 重置状态（用于测试）
- */
 export function resetTrendingState(): void {
   termFrequency.clear();
   seenHeadlines.clear();

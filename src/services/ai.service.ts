@@ -3,8 +3,9 @@ import pLimit from 'p-limit';
 import { z } from 'zod';
 import { NewsRecord } from './db.service';
 import { ClusteredEvent, generateClusterContext } from './clustering';
-import { generateTrendingContext, TrendingSpike, detectSpikes } from './trending';
+import { generateTrendingContext, TrendingSpike } from './trending';
 import { THREAT_LABELS } from './classifier';
+import { CONFIG } from '../config/settings';
 
 // ── 研报输出结构定义 (Zod Schema) ──
 
@@ -41,7 +42,29 @@ const DailyReportSchema = z.object({
 
 export type DailyReport = z.infer<typeof DailyReportSchema>;
 
+// ── Token 预算管理 ──
+
+/**
+ * 粗略 token 估算（英文约 4 字符/token，混合内容约 3.5）
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 3.5);
+}
+
+/**
+ * 将文本截断到 token 预算内，尽量在行边界截断
+ */
+function truncateToTokenBudget(text: string, maxTokens: number): string {
+  const maxChars = Math.floor(maxTokens * 3.5);
+  if (text.length <= maxChars) return text;
+  const truncated = text.substring(0, maxChars);
+  const lastNewline = truncated.lastIndexOf('\n');
+  if (lastNewline > maxChars * 0.8) return truncated.substring(0, lastNewline);
+  return truncated;
+}
+
 // ── AI 提供商配置 ──
+
 interface AIProvider {
   name: string;
   envUrl: string;
@@ -58,54 +81,43 @@ const AI_PROVIDERS: AIProvider[] = [
 export class AIService {
   private limit = pLimit(1);
 
-  /**
-   * 生成每日深度研报
-   * 相比原版的改进（借鉴 WorldMonitor）：
-   * 1. 引入聚类上下文 (从碎片到宏观事件)
-   * 2. 引入趋势信号上下文 (异常飙升检测)
-   * 3. 来源分级标注 (信源可信度透传给 AI)
-   * 4. 严格 Zod 校验输出
-   * 5. AI 回退链支持
-   * 6. 增加研报维度 (威胁评估 + 趋势告警)
-   */
   public async generateDailyReport(
     newsList: NewsRecord[],
     clusters?: ClusteredEvent[],
     trendingSpikes?: TrendingSpike[]
   ): Promise<DailyReport> {
     return this.limit(async () => {
-      // ── 构建多维上下文 ──
+      const totalBudget = CONFIG.AI_MAX_CONTEXT_TOKENS;
+      // 按信息类型分配 token 预算：新闻 70%、聚类 15%、趋势 15%
+      const newsBudget = Math.floor(totalBudget * 0.70);
+      const clusterBudget = Math.floor(totalBudget * 0.15);
+      const trendingBudget = Math.floor(totalBudget * 0.15);
+
       const contextParts: string[] = [];
 
-      // 1. 新闻列表（附源分级和威胁标注）
-      const newsContext = newsList
-        .map((n, i) => {
-          const tierLabel = n.tier ? `T${n.tier}` : 'T4';
-          const threatLabel = n.threatLevel ? THREAT_LABELS[n.threatLevel as keyof typeof THREAT_LABELS] || '' : '';
-          return `[${i+1}] ${threatLabel} ${n.title} (Source: ${n.category}, ${tierLabel})`;
-        })
-        .join('\n')
-        .substring(0, 12000);
-      contextParts.push(newsContext);
+      // 1. 新闻列表（按优先级逐条填充，不超预算）
+      contextParts.push(this.buildNewsContext(newsList, newsBudget));
 
-      // 2. 聚类上下文（如果有）
+      // 2. 聚类上下文
       if (clusters && clusters.length > 0) {
-        contextParts.push('\n' + generateClusterContext(clusters));
+        const clusterCtx = generateClusterContext(clusters);
+        if (clusterCtx) contextParts.push('\n' + truncateToTokenBudget(clusterCtx, clusterBudget));
       }
 
       // 3. 趋势关键词上下文
       const trendingCtx = generateTrendingContext();
       if (trendingCtx) {
-        contextParts.push('\n' + trendingCtx);
+        contextParts.push('\n' + truncateToTokenBudget(trendingCtx, trendingBudget));
       }
 
-      // 4. 趋势飙升详情
+      // 4. 趋势飙升详情（共享趋势预算的剩余部分）
       if (trendingSpikes && trendingSpikes.length > 0) {
-        contextParts.push('\n[TRENDING SPIKES]');
+        const spikeLines = ['[TRENDING SPIKES]'];
         for (const spike of trendingSpikes.slice(0, 5)) {
           const multi = spike.baseline > 0 ? `${spike.multiplier.toFixed(1)}x baseline` : 'new surge';
-          contextParts.push(`- "${spike.term}": ${spike.count} mentions, ${spike.uniqueSources} sources (${multi})`);
+          spikeLines.push(`- "${spike.term}": ${spike.count} mentions, ${spike.uniqueSources} sources (${multi})`);
         }
+        contextParts.push('\n' + spikeLines.join('\n'));
       }
 
       const fullContext = contextParts.join('\n');
@@ -127,23 +139,46 @@ export class AIService {
             response_format: { type: "json_object" }
           }, {
             headers: { 'Authorization': `Bearer ${apiKey}` },
-            timeout: 90000
+            timeout: CONFIG.AI_TIMEOUT_MS,
           });
 
           const rawContent = response.data.choices[0].message.content;
           const parsed = JSON.parse(rawContent);
-          
-          // Zod 校验
-          const validated = DailyReportSchema.parse(parsed);
-          return validated;
+          return DailyReportSchema.parse(parsed);
         } catch (error: any) {
           console.error(`[AI] ${provider.name} 失败: ${error.message}`);
-          continue; // 尝试下一个提供商
+          continue;
         }
       }
 
       throw new Error('所有 AI 提供商均失败');
     });
+  }
+
+  /**
+   * 按优先级（威胁等级 → 源分级）逐条添加新闻到上下文，
+   * 直到填满 token 预算为止。
+   *
+   * newsList 已由 DB 层按 threat+tier 排序，此处直接顺序消费。
+   */
+  private buildNewsContext(newsList: NewsRecord[], tokenBudget: number): string {
+    const lines: string[] = [];
+    let usedTokens = 0;
+
+    for (const n of newsList) {
+      const tierLabel = n.tier ? `T${n.tier}` : 'T4';
+      const threatLabel = n.threatLevel
+        ? (THREAT_LABELS[n.threatLevel as keyof typeof THREAT_LABELS] || '')
+        : '';
+      const line = `[${lines.length + 1}] ${threatLabel} ${n.title} (${n.category}, ${tierLabel})`;
+      const lineTokens = estimateTokens(line);
+
+      if (usedTokens + lineTokens > tokenBudget) break;
+      lines.push(line);
+      usedTokens += lineTokens;
+    }
+
+    return lines.join('\n');
   }
 
   private buildSystemPrompt(): string {

@@ -11,6 +11,8 @@
  */
 
 import { ThreatClassification, aggregateThreats, THREAT_PRIORITY } from './classifier';
+import { tokenize, stripSourceAttribution } from '../utils/tokenizer';
+import { CONFIG } from '../config/settings';
 
 export interface NewsItemForClustering {
   id: string;
@@ -36,37 +38,6 @@ export interface ClusteredEvent {
   threat: ThreatClassification;
 }
 
-// ── 停用词列表（不参与相似度计算）──
-const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-  'should', 'may', 'might', 'can', 'shall', 'must', 'to', 'of', 'in',
-  'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through',
-  'during', 'before', 'after', 'above', 'below', 'between', 'and',
-  'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either', 'neither',
-  'each', 'every', 'all', 'any', 'few', 'more', 'most', 'other',
-  'some', 'such', 'no', 'only', 'own', 'same', 'than', 'too', 'very',
-  'just', 'about', 'also', 'then', 'that', 'this', 'these', 'those',
-  'it', 'its', 'he', 'she', 'they', 'we', 'you', 'who', 'what',
-  'which', 'when', 'where', 'how', 'why', 'if', 'up', 'out', 'over',
-  'says', 'said', 'new', 'news', 'report', 'reports', 'according',
-]);
-
-/**
- * 分词提取关键 token
- */
-function tokenize(text: string): Set<string> {
-  const tokens = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s'-]/g, ' ')
-    .split(/\s+/)
-    .filter(t => t.length >= 3 && !STOP_WORDS.has(t));
-  return new Set(tokens);
-}
-
-/**
- * Jaccard 相似度计算
- */
 function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
   if (setA.size === 0 || setB.size === 0) return 0;
   let intersection = 0;
@@ -78,38 +49,24 @@ function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
 }
 
 /**
- * 去除标题末尾的新闻源归属（如 " - Reuters"）
- */
-function stripSourceAttribution(title: string): string {
-  const idx = title.lastIndexOf(' - ');
-  if (idx === -1) return title;
-  const after = title.slice(idx + 3).trim();
-  if (after.length > 0 && after.length <= 60 && !/[.!?]/.test(after)) {
-    return title.slice(0, idx).trim();
-  }
-  return title;
-}
-
-/**
  * 对新闻列表执行聚类
  * 
  * @param items 待聚类的新闻条目
- * @param similarityThreshold Jaccard 相似度阈值（默认 0.3）
+ * @param similarityThreshold Jaccard 相似度阈值
  * @returns 聚类后的事件列表，按 threat 优先级和时新性排序
  */
 export function clusterNews(
   items: NewsItemForClustering[],
-  similarityThreshold: number = 0.3
+  similarityThreshold: number = CONFIG.CLUSTER_SIMILARITY_THRESHOLD
 ): ClusteredEvent[] {
   if (items.length === 0) return [];
 
-  // 预计算各标题的 token 集合
   const tokenSets = items.map(item => ({
     item,
     tokens: tokenize(stripSourceAttribution(item.title)),
   }));
 
-  // 并查集分组
+  // 并查集
   const parent: number[] = tokenSets.map((_, i) => i);
   function find(x: number): number {
     while (parent[x] !== x) {
@@ -124,7 +81,6 @@ export function clusterNews(
     if (ra !== rb) parent[ra] = rb;
   }
 
-  // O(n²) 两两比较（新闻条目通常 < 500，可接受）
   for (let i = 0; i < tokenSets.length; i++) {
     for (let j = i + 1; j < tokenSets.length; j++) {
       const sim = jaccardSimilarity(tokenSets[i]!.tokens, tokenSets[j]!.tokens);
@@ -134,7 +90,6 @@ export function clusterNews(
     }
   }
 
-  // 按组收集
   const groups = new Map<number, NewsItemForClustering[]>();
   for (let i = 0; i < items.length; i++) {
     const root = find(i);
@@ -143,10 +98,8 @@ export function clusterNews(
     groups.set(root, group);
   }
 
-  // 构建聚类事件
   const clusters: ClusteredEvent[] = [];
   for (const members of groups.values()) {
-    // 选择 tier 最低（最权威）的作为主标题
     const sorted = [...members].sort((a, b) => {
       if (a.sourceTier !== b.sourceTier) return a.sourceTier - b.sourceTier;
       return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
@@ -157,12 +110,10 @@ export function clusterNews(
     const firstSeen = new Date(Math.min(...dates));
     const lastUpdated = new Date(Math.max(...dates));
 
-    // 聚合威胁评估
     const threat = aggregateThreats(
       members.map(m => ({ threat: m.threat, tier: m.sourceTier }))
     );
 
-    // 去重源列表
     const sourceMap = new Map<string, { name: string; tier: number; title: string; url: string }>();
     for (const m of sorted) {
       if (!sourceMap.has(m.source)) {
@@ -184,7 +135,6 @@ export function clusterNews(
     });
   }
 
-  // 按威胁优先级 → 时新性排序
   clusters.sort((a, b) => {
     const pa = THREAT_PRIORITY[a.threat.level];
     const pb = THREAT_PRIORITY[b.threat.level];

@@ -1,7 +1,7 @@
 {
   "name": "deep-currents",
-  "version": "2.0.0",
-  "description": "AI-Powered Macro Intelligence & Global Strategy Engine — Source Tier System | Threat Classification | News Clustering | Trending Detection",
+  "version": "2.1.0",
+  "description": "AI-Powered Macro Intelligence & Global Strategy Engine — Fuzzy Dedup | Token Budget | Multi-Language | Circuit Breaker | Retry",
   "main": "dist/monitor.js",
   "scripts": {
     "start": "ts-node src/monitor.ts",
