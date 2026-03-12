@@ -15,6 +15,9 @@ Built for macro investors, geopolitical analysts, and anyone who needs to cut th
 ## ✨ Highlights
 
 - **35+ curated sources** across geopolitics, macro economics, energy, central banks, cybersecurity — with 4-tier credibility scoring (T1–T4)
+- **Multi-Agent Collaboration**: Orchestrates **Macro Analyst** (geopolitical/macro focus), **Sentiment Analyst** (market tone focus), and **Market Strategist** (CIO-level synthesis) for superior report depth.
+- **Real-time Market Ingestion**: Integrates `yfinance` to fetch live prices for Gold, Crude Oil, S&P 500, etc., enabling AI to perform "Expectation Gap" analysis.
+- **Prediction Feedback Loop**: Automatically records AI asset outlooks and triggers backtested scoring (0-100) after 24h based on actual price movements.
 - **Fuzzy deduplication** — trigram Dice + word Jaccard similarity catches the same story reported differently across outlets, powered by inverted index for speed
 - **News clustering** — fragments auto-group into macro events via Union-Find, picking the most authoritative source as the cluster headline
 - **Trend detection** — rolling-window keyword spike detection with 7-day baseline comparison and cross-source validation
@@ -193,8 +196,12 @@ docker run -d \
 │  (threat)       (Union-Find)   (spike detection) │
 │                      │                           │
 │                      ▼                           │
-│               AI Service (LLM)                   │
-│          (token budget + fallback)               │
+│               Multi-Agent Pipeline               │
+│          (Macro + Sentiment + yfinance)          │
+│                      │                           │
+│                      ▼                           │
+│               Market Strategist                  │
+│          (Synthesis + Prediction Scoring)         │
 │                      │                           │
 │                      ▼                           │
 │  Feishu ◄──── Notifier ────► Telegram            │
@@ -355,8 +362,11 @@ All parameters configurable via `.env` with sensible defaults:
 
 ## 🗺️ Roadmap
 
-**Completed (v2.1):**
+**Completed (v2.2):**
 
+- [x] Multi-Agent Pipeline (Macro/Sentiment/Strategist)
+- [x] yfinance Market Data Integration
+- [x] Prediction Accuracy Scorer
 - [x] Tiered sources & circuit breaker fault tolerance
 - [x] Threat classification pipeline
 - [x] News clustering (fragments → macro events)

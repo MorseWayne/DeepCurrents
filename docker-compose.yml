@@ -3,15 +3,16 @@ services:
   deep-currents:
     build:
       context: .
-      network: host
     container_name: deep-currents
     restart: always
+    network_mode: host  # 启用宿主机网络
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env
     environment:
       - NODE_ENV=production
-      - RSSHUB_BASE_URL=http://rsshub:1200
+      # 关键：因为共享网络，访问 rsshub 需改用 localhost
+      - RSSHUB_BASE_URL=http://127.0.0.1:1200
     depends_on:
       - rsshub
 
@@ -20,19 +21,20 @@ services:
     image: diygod/rsshub:latest
     container_name: rsshub
     restart: always
-    ports:
-      - "1200:1200"
+    network_mode: host  # 启用宿主机网络
+    # 注意：ports 选项在 host 模式下会被忽略，建议删除以保持配置整洁
     environment:
       - NODE_ENV=production
       - CACHE_TYPE=redis
-      - REDIS_URL=redis://redis:6379/
+      # 关键：访问 redis 需改用 localhost
+      - REDIS_URL=redis://127.0.0.1:6379/
       - TWITTER_AUTH_TOKEN=${TWITTER_AUTH_TOKEN:-}
     depends_on:
       - redis
 
-  # 🧠 Redis 缓存（为 RSSHub 提速并防封）
+  # 🧠 Redis 缓存
   redis:
     image: redis:alpine
     container_name: rsshub-redis
     restart: always
-
+    network_mode: host  # 启用宿主机网络
