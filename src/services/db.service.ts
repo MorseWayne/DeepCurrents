@@ -121,6 +121,22 @@ export class DBService {
       CREATE INDEX IF NOT EXISTS idx_raw_news_threat_level ON raw_news(threat_level);
     `);
 
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS predictions (
+        id TEXT PRIMARY KEY,
+        asset_symbol TEXT,
+        prediction_type TEXT,
+        reasoning TEXT,
+        base_price REAL,
+        base_timestamp DATETIME,
+        status TEXT DEFAULT 'pending',
+        score REAL,
+        actual_price REAL,
+        scored_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     this.migrateSchema();
   }
 
@@ -327,5 +343,35 @@ export class DBService {
     const cutoff = new Date(Date.now() - daysToKeep * 24 * 60 * 60 * 1000).toISOString();
     const result = this.db.prepare('DELETE FROM raw_news WHERE created_at < ? AND is_reported = 1').run(cutoff);
     return result.changes;
+  }
+
+  // ── 预测与评分 API ──
+
+  public savePrediction(data: {
+    asset: string;
+    type: 'bullish' | 'bearish' | 'neutral';
+    reasoning: string;
+    price: number;
+    timestamp: string;
+  }) {
+    const id = Buffer.from(`${data.asset}-${data.timestamp}`).toString('base64');
+    this.db.prepare(`
+      INSERT OR REPLACE INTO predictions (id, asset_symbol, prediction_type, reasoning, base_price, base_timestamp)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, data.asset, data.type, data.reasoning, data.price, data.timestamp);
+  }
+
+  public getPendingPredictions(): any[] {
+    return this.db.prepare(`
+      SELECT * FROM predictions WHERE status = 'pending'
+    `).all();
+  }
+
+  public updatePredictionScore(id: string, score: number, actualPrice: number) {
+    this.db.prepare(`
+      UPDATE predictions 
+      SET score = ?, actual_price = ?, status = 'scored', scored_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `).run(score, actualPrice, id);
   }
 }

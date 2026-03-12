@@ -7,6 +7,9 @@ import { classifyThreat, THREAT_LABELS } from './services/classifier';
 import { RSSCircuitBreaker } from './services/circuit-breaker';
 import { ingestHeadlines, detectSpikes, getTrackedTermCount, resetTrendingState } from './services/trending';
 import { clusterNews, NewsItemForClustering, generateClusterContext } from './services/clustering';
+import { getMarketPrice } from './utils/market-data';
+
+import { DBService } from './services/db.service';
 
 dotenv.config();
 
@@ -243,6 +246,53 @@ export class TestSuite {
     }
   }
 
+  /**
+   * 测试市场数据获取功能
+   */
+  public async testMarketData() {
+    logger.info("--- 开始测试市场数据获取功能 ---");
+    const testSymbols = ['GC=F', 'CL=F', '^GSPC']; // 黄金, 原油, 标普500
+    
+    for (const symbol of testSymbols) {
+      try {
+        const data = await getMarketPrice(symbol);
+        logger.info(`✅ [MarketData] ${symbol}: ${data.price} (${data.changePercent.toFixed(2)}%)`);
+      } catch (e: any) {
+        logger.error(`❌ [MarketData] ${symbol} 失败: ${e.message}`);
+      }
+    }
+  }
+
+  /**
+   * 测试数据库预测记录与评分功能
+   */
+  public async testDatabasePredictions() {
+    logger.info("--- 开始测试数据库预测与评分功能 ---");
+    const db = new DBService('data/test-intel.db');
+    
+    const mockPrediction = {
+      asset: 'GC=F',
+      type: 'bullish' as const,
+      reasoning: 'Inflation concerns rising.',
+      price: 2500.50,
+      timestamp: new Date().toISOString()
+    };
+    
+    db.savePrediction(mockPrediction);
+    logger.info("✅ 预测记录已保存");
+    
+    const pending = db.getPendingPredictions();
+    if (pending.length > 0) {
+      const p = pending[0];
+      logger.info(`✅ 成功读取到待评分记录: ${p.asset_symbol} @ ${p.base_price}`);
+      
+      db.updatePredictionScore(p.id, 85, 2600.00);
+      logger.info("✅ 评分已更新");
+    } else {
+      logger.error("❌ 未能读取到待评分记录");
+    }
+  }
+
   public async runAll() {
     await this.testRSS();
     console.log("\n");
@@ -253,6 +303,10 @@ export class TestSuite {
     await this.testTrending();
     console.log("\n");
     await this.testLLM();
+    console.log("\n");
+    await this.testMarketData();
+    console.log("\n");
+    await this.testDatabasePredictions();
     console.log("\n");
     await this.testFeishu();
     console.log("\n");
@@ -269,6 +323,8 @@ const TEST_CATEGORIES: Record<string, (tester: TestSuite) => Promise<void>> = {
   clustering: (t) => t.testClustering(),
   trending: (t) => t.testTrending(),
   llm: (t) => t.testLLM(),
+  'market-data': (t) => t.testMarketData(),
+  'db-predictions': (t) => t.testDatabasePredictions(),
   feishu: (t) => t.testFeishu(),
   telegram: (t) => t.testTelegram(),
 };
