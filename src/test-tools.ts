@@ -9,7 +9,8 @@ import { ingestHeadlines, detectSpikes, getTrackedTermCount, resetTrendingState 
 import { clusterNews, NewsItemForClustering, generateClusterContext } from './services/clustering';
 import { getMarketPrice } from './utils/market-data';
 
-import { DBService } from './services/db.service';
+import { DBService, NewsRecord } from './services/db.service';
+import { AIService } from './services/ai.service';
 
 dotenv.config();
 
@@ -293,6 +294,27 @@ export class TestSuite {
     }
   }
 
+  /**
+   * 测试多智能体协作生成研报
+   */
+  public async testMultiAgentReport() {
+    logger.info("--- 开始测试多智能体协作研报生成 ---");
+    const ai = new AIService();
+    const mockNews: NewsRecord[] = [
+      { id: '1', url: 'http://a.com', title: 'Global gold prices surge as geopolitical tensions rise in Middle East', content: 'Gold futures jumped 2% today as investors seek safe haven assets amid escalating conflicts...', category: 'Reuters', tier: 1, threatLevel: 'high', timestamp: new Date().toISOString() },
+      { id: '2', url: 'http://b.com', title: 'Oil prices fluctuate following OPEC meeting', content: 'Oil prices saw volatility today as OPEC members discussed production quotas for the next quarter...', category: 'Bloomberg', tier: 1, threatLevel: 'medium', timestamp: new Date().toISOString() }
+    ];
+
+    try {
+      const report = await ai.generateDailyReport(mockNews);
+      logger.info(`✅ 研报生成成功! 日期: ${report.date}`);
+      logger.info(`执行摘要: ${report.executiveSummary.substring(0, 100)}...`);
+      logger.info(`投资趋势: ${JSON.stringify(report.investmentTrends)}`);
+    } catch (e: any) {
+      logger.error(`❌ 研报生成失败: ${e.message}`);
+    }
+  }
+
   public async runAll() {
     await this.testRSS();
     console.log("\n");
@@ -325,6 +347,7 @@ const TEST_CATEGORIES: Record<string, (tester: TestSuite) => Promise<void>> = {
   llm: (t) => t.testLLM(),
   'market-data': (t) => t.testMarketData(),
   'db-predictions': (t) => t.testDatabasePredictions(),
+  'multi-agent-report': (t) => t.testMultiAgentReport(),
   feishu: (t) => t.testFeishu(),
   telegram: (t) => t.testTelegram(),
 };
