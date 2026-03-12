@@ -82,7 +82,7 @@ All tasks follow a strict lifecycle:
 
 3.  **Execute Automated Tests with Proactive Debugging:**
     -   Before execution, you **must** announce the exact shell command you will use to run the tests.
-    -   **Example Announcement:** "I will now run the automated test suite to verify the phase. **Command:** `CI=true npm test`"
+    -   **Example Announcement:** "I will now run the automated test suite to verify the phase. **Command:** `python3 -m pytest -q`"
     -   Execute the announced command.
     -   If tests fail, you **must** inform the user and begin debugging. You may attempt to propose a fix a **maximum of two times**. If the tests still fail after your second proposed fix, you **must stop**, report the persistent failure, and ask the user for guidance.
 
@@ -96,7 +96,7 @@ All tasks follow a strict lifecycle:
         The automated tests have passed. For manual verification, please follow these steps:
 
         **Manual Verification Steps:**
-        1.  **Start the development server with the command:** `npm run dev`
+        1.  **Start the development server with the command:** `python3 src/main.py`
         2.  **Open your browser to:** `http://localhost:3000`
         3.  **Confirm that you see:** The new user profile page, with the user's name and email displayed correctly.
         ```
@@ -142,7 +142,7 @@ Before marking any task complete, verify:
 - [ ] Code coverage meets requirements (>80%)
 - [ ] Code follows project's code style guidelines (as defined in `code_styleguides/`)
 - [ ] All public functions/methods are documented (e.g., docstrings, JSDoc, GoDoc)
-- [ ] Type safety is enforced (e.g., type hints, TypeScript types, Go types)
+- [ ] Type safety is enforced (e.g., type hints with mypy/pyright, Go types)
 - [ ] No linting or static analysis errors (using the project's configured tools)
 - [ ] Works correctly on mobile (if applicable)
 - [ ] Documentation updated if needed
@@ -155,21 +155,21 @@ Before marking any task complete, verify:
 ### Setup
 ```bash
 # Example: Commands to set up the development environment (e.g., install dependencies, configure database)
-# e.g., for a Node.js project: npm install
+# e.g., for a Python project: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # e.g., for a Go project: go mod tidy
 ```
 
 ### Daily Development
 ```bash
 # Example: Commands for common daily tasks (e.g., start dev server, run tests, lint, format)
-# e.g., for a Node.js project: npm run dev, npm test, npm run lint
+# e.g., for a Python project: python3 src/main.py, python3 -m pytest -q
 # e.g., for a Go project: go run main.go, go test ./..., go fmt ./...
 ```
 
 ### Before Committing
 ```bash
 # Example: Commands to run all pre-commit checks (e.g., format, lint, type check, run tests)
-# e.g., for a Node.js project: npm run check
+# e.g., for a Python project: python3 -m pytest -q
 # e.g., for a Go project: make check (if a Makefile exists)
 ```
 

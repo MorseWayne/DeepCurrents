@@ -10,7 +10,7 @@
 
 DeepCurrents 从多源 RSS/RSSHub 信息流中抓取新闻，进行去重、威胁分类、事件聚类，并通过多智能体 LLM 流程生成每日结构化研报，再投递到飞书与 Telegram。
 
-当前主实现位于 `src/`（Python）；`src_ts/` 为历史 TypeScript 版本参考，不是默认运行链路。
+当前实现位于 `src/`（Python），并以 Python 单栈持续迭代。
 
 ---
 
