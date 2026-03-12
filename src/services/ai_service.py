@@ -1,13 +1,16 @@
 import asyncio
 import json
 import re
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Literal
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 from ..config.settings import CONFIG
+from ..config.asset_symbols import resolve_asset_symbol, get_default_market_symbols
 from .db_service import DBService, NewsRecord
 from .clustering import ClusteredEvent, generate_cluster_context
-from .classifier import THREAT_LABELS, ThreatClassification
+from .classifier import THREAT_LABELS
+from ..utils.market_data import get_market_price, search_market_symbol
 from ..utils.logger import get_logger
 from .prompts import MACRO_ANALYST_PROMPT, SENTIMENT_ANALYST_PROMPT, MARKET_STRATEGIST_PROMPT
 
@@ -104,6 +107,7 @@ class AIService:
     def __init__(self, db: Optional[DBService] = None):
         self.db = db or DBService()
         self.client = AsyncOpenAI(api_key=CONFIG.ai_api_key, base_url=CONFIG.ai_api_url.replace('/chat/completions', ''))
+        self._asset_symbol_cache: Dict[str, Optional[str]] = {}
 
     async def generate_daily_report(
         self,
@@ -127,10 +131,7 @@ class AIService:
 
         # ── 多智能体并行流程 ──
         logger.info("启动多智能体并发推理...")
-        
-        # 为了兼容 yfinance，此处预留占位逻辑（实际逻辑在 Phase 5 任务 2 中完善）
-        # 暂时模拟价格数据
-        market_price_context = "[REAL-TIME MARKET DATA]\n- GC=F: 2500.5\n- CL=F: 80.2"
+        market_price_context = await self.build_market_price_context()
 
         tasks = [
             self.call_agent("MacroAnalyst", MACRO_ANALYST_PROMPT, raw_context),
@@ -164,10 +165,102 @@ class AIService:
         parsed_json = await self.parse_daily_report_json(final_raw)
         report = DailyReport(**parsed_json)
         
-        # ── 预测持久化逻辑预留 ──
-        # await self._persist_predictions(report)
+        # 写入预测闭环（失败不影响主流程）
+        await self._persist_predictions(report)
 
         return report
+
+    async def build_market_price_context(self) -> str:
+        """构建实时市场上下文，失败时自动回退到占位文本。"""
+        symbols = get_default_market_symbols(limit=CONFIG.ai_market_context_symbols_limit)
+        if not symbols:
+            symbols = ["GC=F", "CL=F"]
+
+        fallback_symbols = symbols[: min(3, len(symbols))]
+        fallback = "[REAL-TIME MARKET DATA]\n" + "\n".join(
+            f"- {symbol}: unavailable" for symbol in fallback_symbols
+        )
+
+        if not CONFIG.ai_use_realtime_market_context:
+            return fallback
+
+        tasks = [asyncio.wait_for(get_market_price(sym), timeout=8) for sym in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        lines = ["[REAL-TIME MARKET DATA]"]
+        has_data = False
+        for symbol, result in zip(symbols, results):
+            if isinstance(result, Exception):
+                logger.debug(f"市场数据获取失败 {symbol}: {result}")
+                continue
+
+            price = result.get("price")
+            change = result.get("changePercent")
+            if price is None:
+                continue
+
+            has_data = True
+            if change is not None:
+                lines.append(f"- {symbol}: {price} ({change:+.2f}%)")
+            else:
+                lines.append(f"- {symbol}: {price}")
+
+        return "\n".join(lines) if has_data else fallback
+
+    async def _persist_predictions(self, report: DailyReport):
+        if not CONFIG.report_auto_save_predictions:
+            return
+
+        saved = 0
+        skipped = 0
+        for trend in report.investmentTrends:
+            try:
+                symbol = await self.resolve_asset_symbol_auto(trend.assetClass)
+                if not symbol:
+                    skipped += 1
+                    continue
+
+                market = await asyncio.wait_for(get_market_price(symbol), timeout=10)
+                await self.db.save_prediction({
+                    "asset": symbol,
+                    "type": trend.trend.lower(),
+                    "reasoning": trend.rationale,
+                    "price": market["price"],
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+                saved += 1
+            except Exception as e:
+                skipped += 1
+                logger.warning(f"预测持久化失败 {trend.assetClass}/{symbol}: {e}")
+
+        if saved > 0 or skipped > 0:
+            logger.info(f"预测持久化完成: saved={saved}, skipped={skipped}")
+
+    async def resolve_asset_symbol_auto(self, asset_class: str) -> Optional[str]:
+        normalized = (asset_class or "").strip().lower()
+        if not normalized:
+            return None
+
+        if normalized in self._asset_symbol_cache:
+            return self._asset_symbol_cache[normalized]
+
+        symbol = resolve_asset_symbol(asset_class)
+        if symbol:
+            self._asset_symbol_cache[normalized] = symbol
+            return symbol
+
+        if not CONFIG.ai_symbol_search_enabled:
+            self._asset_symbol_cache[normalized] = None
+            return None
+
+        timeout_sec = max(CONFIG.ai_symbol_search_timeout_ms, 1000) / 1000
+        try:
+            symbol = await asyncio.wait_for(search_market_symbol(asset_class), timeout=timeout_sec)
+        except Exception as e:
+            logger.debug(f"自动解析 symbol 失败 '{asset_class}': {e}")
+            symbol = None
+        self._asset_symbol_cache[normalized] = symbol
+        return symbol
 
     async def parse_daily_report_json(self, raw_text: str) -> Dict[str, Any]:
         """解析日报 JSON；若失败，自动触发一次修复重试。"""

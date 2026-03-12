@@ -20,6 +20,8 @@ from src.utils.market_data import get_market_price
 logger = get_logger("test_tools")
 
 class TestSuite:
+    __test__ = False  # Prevent pytest from collecting this utility class.
+
     def __init__(self):
         self.notifier = Notifier()
         self.ai_service = AIService()

@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     ai_fallback_model: str = Field(default='gpt-4o-mini', validation_alias='AI_FALLBACK_MODEL')
     ai_timeout_ms: int = Field(default=90000, validation_alias='AI_TIMEOUT_MS')
     ai_max_context_tokens: int = Field(default=16000, validation_alias='AI_MAX_CONTEXT_TOKENS')
+    ai_use_realtime_market_context: bool = Field(default=True, validation_alias='AI_USE_REALTIME_MARKET_CONTEXT')
+    ai_market_context_symbols_limit: int = Field(default=6, validation_alias='AI_MARKET_CONTEXT_SYMBOLS_LIMIT')
+    ai_symbol_search_enabled: bool = Field(default=True, validation_alias='AI_SYMBOL_SEARCH_ENABLED')
+    ai_symbol_search_timeout_ms: int = Field(default=8000, validation_alias='AI_SYMBOL_SEARCH_TIMEOUT_MS')
+    asset_symbols_file: str = Field(default='src/config/asset_symbols.json', validation_alias='ASSET_SYMBOLS_FILE')
 
     # ── 标题去重 ──
     dedup_similarity_threshold: float = Field(default=0.55, validation_alias='DEDUP_SIMILARITY_THRESHOLD')
@@ -33,6 +38,7 @@ class Settings(BaseSettings):
 
     # ── 研报 ──
     report_max_news: int = Field(default=500, validation_alias='REPORT_MAX_NEWS')
+    report_auto_save_predictions: bool = Field(default=True, validation_alias='REPORT_AUTO_SAVE_PREDICTIONS')
     data_retention_days: int = Field(default=30, validation_alias='DATA_RETENTION_DAYS')
 
     # ── 聚类 ──

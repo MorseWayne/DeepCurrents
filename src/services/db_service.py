@@ -31,6 +31,11 @@ class TitleCacheEntry:
     words: Set[str]
     trigrams: Set[str]
 
+
+def to_sqlite_timestamp(dt: datetime) -> str:
+    """Format datetime to SQLite CURRENT_TIMESTAMP-compatible text."""
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
 def normalize_title(title: str) -> str:
     """标准化标题：去掉末尾媒体归属、转小写、保留关键字符"""
     t = strip_source_attribution(title).lower()
@@ -71,7 +76,9 @@ class DBService:
         self._cache_timestamp = 0
         
         # 确保数据目录存在
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
     async def __aenter__(self):
         await self.connect()
@@ -133,7 +140,7 @@ class DBService:
         if self._title_cache and (now - self._cache_timestamp < self.TITLE_CACHE_TTL_SECONDS):
             return
 
-        cutoff = (datetime.now() - timedelta(hours=hours_back)).isoformat()
+        cutoff = to_sqlite_timestamp(datetime.utcnow() - timedelta(hours=hours_back))
         async with self._db.execute(
             "SELECT title FROM raw_news WHERE created_at > ? ORDER BY created_at DESC LIMIT 5000",
             (cutoff,)
@@ -194,27 +201,27 @@ class DBService:
 
         return False
 
-    async def save_news(self, url: str, title: str, content: str, source: str, meta: Dict[str, Any] = None):
+    async def save_news(self, url: str, title: str, content: str, source: str, meta: Dict[str, Any] = None) -> bool:
         news_id = base64.b64encode(url.encode()).decode()
         meta = meta or {}
-        try:
-            await self._db.execute(
-                """INSERT OR IGNORE INTO raw_news 
-                   (id, url, title, content, source, source_tier, source_type, threat_level, threat_category, threat_confidence) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    news_id, url, title, content, source,
-                    meta.get('tier', 4),
-                    meta.get('sourceType', 'other'),
-                    meta.get('threatLevel', 'info'),
-                    meta.get('threatCategory', 'general'),
-                    meta.get('threatConfidence', 0.3)
-                )
+        cursor = await self._db.execute(
+            """INSERT OR IGNORE INTO raw_news 
+               (id, url, title, content, source, source_tier, source_type, threat_level, threat_category, threat_confidence) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                news_id, url, title, content, source,
+                meta.get('tier', 4),
+                meta.get('sourceType', 'other'),
+                meta.get('threatLevel', 'info'),
+                meta.get('threatCategory', 'general'),
+                meta.get('threatConfidence', 0.3)
             )
-            await self._db.commit()
+        )
+        await self._db.commit()
+        inserted = cursor.rowcount == 1
+        if inserted:
             self._push_to_title_cache(title)
-        except Exception as e:
-            logger.error(f"Failed to save news: {e}")
+        return inserted
 
     async def get_unreported_news(self, limit: int = None) -> List[NewsRecord]:
         limit = limit or CONFIG.report_max_news
@@ -273,7 +280,7 @@ class DBService:
 
     async def cleanup(self, days_to_keep: int = None):
         days_to_keep = days_to_keep or CONFIG.data_retention_days
-        cutoff = (datetime.now() - timedelta(days=days_to_keep)).isoformat()
+        cutoff = to_sqlite_timestamp(datetime.utcnow() - timedelta(days=days_to_keep))
         async with self._db.execute("DELETE FROM raw_news WHERE created_at < ? AND is_reported = 1", (cutoff,)) as cursor:
             changes = cursor.rowcount
             await self._db.commit()

@@ -1,11 +1,19 @@
 import asyncio
 import signal
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from src.config.settings import CONFIG
 from src.engine import DeepCurrentsEngine
 from src.utils.logger import get_logger
 
 logger = get_logger("main")
+
+
+def build_cron_trigger(expr: str, env_name: str) -> CronTrigger:
+    try:
+        return CronTrigger.from_crontab(expr)
+    except ValueError as e:
+        raise ValueError(f"{env_name} 配置非法: {expr}") from e
 
 async def main():
     engine = DeepCurrentsEngine()
@@ -16,21 +24,31 @@ async def main():
 
     # 2. 配置调度任务
     # 数据采集
-    scheduler.add_job(engine.collect_data, 'cron', 
-                      minute=CONFIG.cron_collect.split(' ')[0] if ' ' in CONFIG.cron_collect else 0)
+    scheduler.add_job(
+        engine.collect_data,
+        trigger=build_cron_trigger(CONFIG.cron_collect, "CRON_COLLECT"),
+        id="collect_data",
+        replace_existing=True
+    )
     
     # 研报生成
-    scheduler.add_job(engine.generate_and_send_report, 'cron', 
-                      hour=CONFIG.cron_report.split(' ')[1] if ' ' in CONFIG.cron_report else 8,
-                      minute=CONFIG.cron_report.split(' ')[0] if ' ' in CONFIG.cron_report else 0)
+    scheduler.add_job(
+        engine.generate_and_send_report,
+        trigger=build_cron_trigger(CONFIG.cron_report, "CRON_REPORT"),
+        id="generate_report",
+        replace_existing=True
+    )
     
     # 自动评分 (每4小时一次)
-    scheduler.add_job(engine.scorer.run_scoring_task, 'interval', hours=4)
+    scheduler.add_job(engine.scorer.run_scoring_task, 'interval', hours=4, id="score_predictions", replace_existing=True)
     
     # 数据清理
-    scheduler.add_job(engine.cleanup, 'cron',
-                      hour=CONFIG.cron_cleanup.split(' ')[1] if ' ' in CONFIG.cron_cleanup else 3,
-                      minute=CONFIG.cron_cleanup.split(' ')[0] if ' ' in CONFIG.cron_cleanup else 0)
+    scheduler.add_job(
+        engine.cleanup,
+        trigger=build_cron_trigger(CONFIG.cron_cleanup, "CRON_CLEANUP"),
+        id="cleanup_data",
+        replace_existing=True
+    )
 
     scheduler.start()
     logger.info("任务调度器已启动")

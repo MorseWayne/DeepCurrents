@@ -1,7 +1,7 @@
 import asyncio
 import aiohttp
 import feedparser
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from ..config.settings import CONFIG
 from ..config.sources import SOURCES, Source, resolve_source_url
 from .circuit_breaker import RSSCircuitBreaker
@@ -26,9 +26,12 @@ class RSSCollector:
         
         # 按 tier 排序
         sorted_sources = sorted(SOURCES, key=lambda s: s.tier)
-        
-        tasks = [self.fetch_source(source) for source in sorted_sources]
-        results = await asyncio.gather(*tasks)
+
+        timeout = aiohttp.ClientTimeout(total=CONFIG.rss_timeout_ms / 1000)
+        connector = aiohttp.TCPConnector(limit=max(CONFIG.rss_concurrency * 2, 20))
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            tasks = [self.fetch_source(source, session=session) for source in sorted_sources]
+            results = await asyncio.gather(*tasks)
         
         total_new = sum(r.get('new_count', 0) for r in results)
         total_errors = sum(1 for r in results if r.get('error'))
@@ -42,19 +45,20 @@ class RSSCollector:
             "skipped": total_skipped
         }
 
-    async def fetch_source(self, source: Source) -> Dict[str, Any]:
+    async def fetch_source(self, source: Source, session: Optional[aiohttp.ClientSession] = None) -> Dict[str, Any]:
         """抓取单个源"""
         if self.breaker.is_on_cooldown(source.name):
             return {"skipped": True}
 
         async with self.semaphore:
+            managed_session = session is None
+            active_session = session or aiohttp.ClientSession()
             try:
                 url = resolve_source_url(source)
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=CONFIG.rss_timeout_ms / 1000) as response:
-                        if response.status != 200:
-                            raise Exception(f"HTTP {response.status}")
-                        content = await response.text()
+                async with active_session.get(url, timeout=CONFIG.rss_timeout_ms / 1000) as response:
+                    if response.status != 200:
+                        raise Exception(f"HTTP {response.status}")
+                    content = await response.text()
                 
                 feed = feedparser.parse(content)
                 new_count = 0
@@ -73,19 +77,20 @@ class RSSCollector:
 
                     # 高优源尝试全文提取
                     if source.tier <= 2:
-                        extracted = await Extractor.extract(link)
+                        extracted = await Extractor.extract(link, session=active_session)
                         if extracted and len(extracted['content']) > len(final_content):
                             final_content = extracted['content']
 
-                    # 保存新闻（此处暂时不包含威胁分类，将在下一个任务中实现）
-                    await self.db.save_news(
+                    # 保存新闻
+                    inserted = await self.db.save_news(
                         link, title, final_content, source.name,
                         meta={
                             'tier': source.tier,
                             'sourceType': source.type
                         }
                     )
-                    new_count += 1
+                    if inserted:
+                        new_count += 1
 
                 self.breaker.record_success(source.name)
                 if new_count > 0:
@@ -97,3 +102,6 @@ class RSSCollector:
                 self.breaker.record_failure(source.name)
                 logger.error(f"[ERR] T{source.tier} {source.name}: {e}")
                 return {"error": str(e)}
+            finally:
+                if managed_session:
+                    await active_session.close()

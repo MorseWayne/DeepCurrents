@@ -9,7 +9,7 @@ def mock_db():
     db = MagicMock()
     db.has_news = AsyncMock(return_value=False)
     db.has_similar_title = AsyncMock(return_value=False)
-    db.save_news = AsyncMock()
+    db.save_news = AsyncMock(return_value=True)
     return db
 
 @pytest.mark.asyncio

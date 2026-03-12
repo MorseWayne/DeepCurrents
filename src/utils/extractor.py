@@ -7,16 +7,22 @@ logger = get_logger("extractor")
 
 class Extractor:
     @staticmethod
-    async def extract(url: str, max_length: int = 5000) -> Optional[Dict[str, str]]:
+    async def extract(
+        url: str,
+        max_length: int = 5000,
+        session: Optional[aiohttp.ClientSession] = None
+    ) -> Optional[Dict[str, str]]:
         """提取网页正文"""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as response:
-                    if response.status != 200:
-                        return None
-                    html = await response.text()
+            managed_session = session is None
+            active_session = session or aiohttp.ClientSession()
+            async with active_session.get(url, timeout=15) as response:
+                if response.status != 200:
+                    return None
+                html = await response.text()
             
-            soup = BeautifulSoup(html, 'lxml')
+            parser = 'xml' if html.lstrip().startswith('<?xml') else 'lxml'
+            soup = BeautifulSoup(html, parser)
             
             # 移除脚本和样式
             for script in soup(["script", "style"]):
@@ -43,3 +49,6 @@ class Extractor:
         except Exception as e:
             logger.debug(f"Failed to extract {url}: {e}")
             return None
+        finally:
+            if 'managed_session' in locals() and managed_session:
+                await active_session.close()

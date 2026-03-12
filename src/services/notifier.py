@@ -1,6 +1,7 @@
 import aiohttp
 import httpx
 import asyncio
+from html import escape
 from typing import Dict, Any, List
 from ..config.settings import CONFIG
 from .ai_service import DailyReport
@@ -103,25 +104,24 @@ class Notifier:
                     raise Exception(f"Feishu API error: {text}")
 
     async def send_to_telegram(self, report: DailyReport):
-        text = f"🌊 *DeepCurrents Daily Intelligence*\n📅 {report.date}\n\n"
-        text += f"*核心主线:* {report.executiveSummary}\n\n"
+        text = f"🌊 <b>DeepCurrents Daily Intelligence</b>\n📅 {escape(report.date)}\n\n"
+        text += f"<b>核心主线:</b> {escape(report.executiveSummary)}\n\n"
         
-        text += "*📊 重大事件:*\n"
+        text += "<b>📊 重大事件:</b>\n"
         for i, e in enumerate(report.globalEvents[:5]):
-            # 对 MarkdownV2 进行简单的字符转义
-            title = e.title.replace('.', '\\.').replace('-', '\\-')
-            text += f"{i+1}\\. *{title}*\n"
+            text += f"{i + 1}. <b>{escape(e.title)}</b>\n"
 
-        text += "\n*💼 资产研判:*\n"
+        text += "\n<b>💼 资产研判:</b>\n"
         for t in report.investmentTrends:
             icon = '📈' if t.trend == 'Bullish' else ('📉' if t.trend == 'Bearish' else '➡️')
-            text += f"{icon} *{t.assetClass}*: {t.trend}\n"
+            text += f"{icon} <b>{escape(t.assetClass)}</b>: {escape(t.trend)}\n"
 
         url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
         payload = {
             "chat_id": self.tg_chat_id,
             "text": text,
-            "parse_mode": "Markdown"
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
         }
 
         # Telegram 使用 httpx 以支持 SOCKS/HTTP 代理
