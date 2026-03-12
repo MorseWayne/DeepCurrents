@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Mapping
+
+from .repository_support import ensure_pool, normalize_row, normalize_rows
+
+
+class ArticleRepository:
+    def __init__(self, pool: Any):
+        self._pool = pool
+
+    async def create_article(self, article: Mapping[str, Any]) -> dict[str, Any]:
+        pool = ensure_pool(self._pool)
+        content = article.get("content", "")
+        clean_content = article.get("clean_content", content)
+        content_length = article.get("content_length", len(clean_content or content))
+        row = await pool.fetchrow(
+            """
+            INSERT INTO articles (
+                article_id,
+                source_id,
+                canonical_url,
+                title,
+                normalized_title,
+                content,
+                clean_content,
+                language,
+                published_at,
+                ingested_at,
+                tier,
+                source_type,
+                exact_hash,
+                simhash,
+                content_length,
+                quality_score,
+                metadata
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+            )
+            RETURNING *
+            """,
+            article["article_id"],
+            article["source_id"],
+            article["canonical_url"],
+            article["title"],
+            article.get("normalized_title", article["title"]),
+            content,
+            clean_content,
+            article.get("language", ""),
+            article.get("published_at"),
+            article.get("ingested_at"),
+            article.get("tier", 4),
+            article.get("source_type", "other"),
+            article.get("exact_hash", ""),
+            article.get("simhash", ""),
+            content_length,
+            article.get("quality_score", 0),
+            article.get("metadata", {}),
+        )
+        return normalize_row(row) or {}
+
+    async def get_article(self, article_id: str) -> dict[str, Any] | None:
+        pool = ensure_pool(self._pool)
+        row = await pool.fetchrow(
+            "SELECT * FROM articles WHERE article_id = $1",
+            article_id,
+        )
+        return normalize_row(row)
+
+    async def get_article_by_canonical_url(
+        self, canonical_url: str
+    ) -> dict[str, Any] | None:
+        pool = ensure_pool(self._pool)
+        row = await pool.fetchrow(
+            "SELECT * FROM articles WHERE canonical_url = $1",
+            canonical_url,
+        )
+        return normalize_row(row)
+
+    async def find_articles_by_exact_hash(
+        self, exact_hash: str, *, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        pool = ensure_pool(self._pool)
+        rows = await pool.fetch(
+            """
+            SELECT *
+            FROM articles
+            WHERE exact_hash = $1
+            ORDER BY ingested_at DESC, created_at DESC
+            LIMIT $2
+            """,
+            exact_hash,
+            limit,
+        )
+        return normalize_rows(rows)
+
+    async def list_recent_articles(
+        self, *, since: datetime | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        pool = ensure_pool(self._pool)
+        if since is None:
+            rows = await pool.fetch(
+                """
+                SELECT *
+                FROM articles
+                ORDER BY COALESCE(published_at, ingested_at) DESC, created_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT *
+                FROM articles
+                WHERE COALESCE(published_at, ingested_at) >= $1
+                ORDER BY COALESCE(published_at, ingested_at) DESC, created_at DESC
+                LIMIT $2
+                """,
+                since,
+                limit,
+            )
+        return normalize_rows(rows)
+
+    async def upsert_article_features(
+        self, features: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        pool = ensure_pool(self._pool)
+        row = await pool.fetchrow(
+            """
+            INSERT INTO article_features (
+                article_id,
+                embedding_model,
+                embedding_vector_id,
+                language,
+                simhash,
+                entities,
+                keywords,
+                quality_score,
+                feature_version
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (article_id) DO UPDATE SET
+                embedding_model = EXCLUDED.embedding_model,
+                embedding_vector_id = EXCLUDED.embedding_vector_id,
+                language = EXCLUDED.language,
+                simhash = EXCLUDED.simhash,
+                entities = EXCLUDED.entities,
+                keywords = EXCLUDED.keywords,
+                quality_score = EXCLUDED.quality_score,
+                feature_version = EXCLUDED.feature_version,
+                updated_at = NOW()
+            RETURNING *
+            """,
+            features["article_id"],
+            features.get("embedding_model", ""),
+            features.get("embedding_vector_id", ""),
+            features.get("language", ""),
+            features.get("simhash", ""),
+            features.get("entities", []),
+            features.get("keywords", []),
+            features.get("quality_score", 0),
+            features.get("feature_version", "v1"),
+        )
+        return normalize_row(row) or {}
+
+    async def get_article_features(self, article_id: str) -> dict[str, Any] | None:
+        pool = ensure_pool(self._pool)
+        row = await pool.fetchrow(
+            "SELECT * FROM article_features WHERE article_id = $1",
+            article_id,
+        )
+        return normalize_row(row)
+
+    async def create_dedup_link(self, link: Mapping[str, Any]) -> dict[str, Any]:
+        pool = ensure_pool(self._pool)
+        row = await pool.fetchrow(
+            """
+            INSERT INTO article_dedup_links (
+                link_id,
+                left_article_id,
+                right_article_id,
+                relation_type,
+                confidence,
+                reason
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+            """,
+            link["link_id"],
+            link["left_article_id"],
+            link["right_article_id"],
+            link["relation_type"],
+            link.get("confidence", 0),
+            link.get("reason", {}),
+        )
+        return normalize_row(row) or {}
+
+    async def list_dedup_links(self, article_id: str) -> list[dict[str, Any]]:
+        pool = ensure_pool(self._pool)
+        rows = await pool.fetch(
+            """
+            SELECT *
+            FROM article_dedup_links
+            WHERE left_article_id = $1 OR right_article_id = $1
+            ORDER BY created_at DESC
+            """,
+            article_id,
+        )
+        return normalize_rows(rows)
