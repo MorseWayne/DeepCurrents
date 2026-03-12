@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # ── RSS 采集 ──
     rss_timeout_ms: int = Field(default=15000, validation_alias='RSS_TIMEOUT_MS')
     rss_concurrency: int = Field(default=10, validation_alias='RSS_CONCURRENCY')
+    rsshub_base_url: str = Field(default='', validation_alias='RSSHUB_BASE_URL')
 
     # ── 熔断器 ──
     cb_max_failures: int = Field(default=3, validation_alias='CB_MAX_FAILURES')
@@ -54,6 +55,9 @@ class Settings(BaseSettings):
     log_to_file: bool = Field(default=False, validation_alias='LOG_TO_FILE')
     log_file_path: str = Field(default='logs/deepcurrents.log', validation_alias='LOG_FILE_PATH')
     log_to_stderr: bool = Field(default=True, validation_alias='LOG_TO_STDERR')
+
+    # ── 网络 ──
+    https_proxy: str = Field(default='', validation_alias='HTTPS_PROXY')
 
     model_config = SettingsConfigDict(
         env_file='.env',

@@ -1,4 +1,5 @@
 import aiohttp
+import httpx
 import asyncio
 from typing import Dict, Any, List
 from ..config.settings import CONFIG
@@ -26,6 +27,7 @@ class Notifier:
         self.feishu_url = CONFIG.feishu_webhook
         self.tg_token = CONFIG.telegram_bot_token
         self.tg_chat_id = CONFIG.telegram_chat_id
+        self.proxy = CONFIG.https_proxy if CONFIG.https_proxy else None
 
     async def deliver_all(self, report: DailyReport, news_count: int, cluster_count: int):
         tasks = []
@@ -93,6 +95,7 @@ class Notifier:
             }
         }
 
+        # Feishu 通常不需要海外代理，直接发送
         async with aiohttp.ClientSession() as session:
             async with session.post(self.feishu_url, json=card) as resp:
                 if resp.status != 200:
@@ -121,8 +124,8 @@ class Notifier:
             "parse_mode": "Markdown"
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise Exception(f"Telegram API error: {text}")
+        # Telegram 使用 httpx 以支持 SOCKS/HTTP 代理
+        async with httpx.AsyncClient(proxy=self.proxy) as client:
+            resp = await client.post(url, json=payload, timeout=20.0)
+            if resp.status_code != 200:
+                raise Exception(f"Telegram API error: {resp.status_code} - {resp.text}")

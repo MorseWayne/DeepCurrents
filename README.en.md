@@ -122,6 +122,61 @@ uv run pytest
 
 ---
 
+## 🧪 Integration Testing
+
+Use `pytest` to verify component connectivity and logical consistency:
+
+```bash
+uv run pytest                     # Run all tests
+uv run pytest tests/test_collector.py   # Test collector only
+uv run pytest tests/test_ai_service.py  # Test AI service only
+uv run pytest tests/test_scorer.py      # Test scoring system only
+```
+
+### 🛠️ Diagnostic Test Tools
+
+In addition to automated tests, this project provides a diagnostic tool `src/test_tools.py` designed for daily maintenance to quickly verify production connectivity:
+
+```bash
+# Show help
+uv run python -m src.test_tools --help
+
+# Concurrently verify connectivity for all 35+ sources (RSS/RSSHub)
+uv run python -m src.test_tools --rss
+
+# Test AI (LLM) service connectivity and response
+uv run python -m src.test_tools --llm
+
+# Send a test report to Feishu and Telegram (Verify Webhook/Bot config)
+uv run python -m src.test_tools --feishu
+uv run python -m src.test_tools --tg
+
+# Test yfinance market data ingestion
+uv run python -m src.test_tools --market
+
+# Run all diagnostic tests at once
+uv run python -m src.test_tools --all
+```
+
+### 💡 Advanced Testing Tips
+
+- **Verbose Mode**: `uv run pytest -s` (Display prints and logs during tests).
+- **Exit on First Failure**: `uv run pytest -x`.
+- **Run Specific Tests**: `uv run pytest -k "collector"` (Matches test file or function names).
+- **Skip Slow Tests**: For tests involving AI generation, use `uv run pytest -m "not slow"` (requires marker configuration).
+
+### 🌐 Networking, Proxy & Telegram Access
+
+Telegram (Bot API and RSS sources) might be restricted in some regions. Please note:
+
+1.  **Notification Proxy**: This system has integrated `HTTPS_PROXY` support. If Telegram delivery fails, configure your proxy address (HTTP/HTTPS/SOCKS5 supported) in `.env`.
+2.  **RSSHub Tuning**: 
+    - The public instance `rsshub.app` has strict rate limits for Telegram/Twitter and often returns 403.
+    - **Self-Hosting Recommended**: Start a local instance via `docker compose up -d rsshub redis`.
+    - **Configuration**: Set `RSSHUB_BASE_URL=http://localhost:1200` in `.env` to enable automatic URL rewriting.
+
+---
+
 ## 🔧 Tech Stack
 
 | Component | Technology | Purpose |

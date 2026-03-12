@@ -196,6 +196,17 @@ docker run -d \
 
 ---
 
+## 📅 任务调度
+
+| 任务 | 默认 Cron | 模块 | 说明 |
+| :--- | :--- | :--- | :--- |
+| **数据采集** | `0 * * * *` | `collector` | 每小时扫描 RSS 源，去重入库 |
+| **研报生成** | `0 8 * * *` | `engine` | 每天 08:00 合成情报，多智能体推理并推送 |
+| **自动评分** | 每 4 小时 | `scorer` | 对历史预测进行真实行情回测评分 |
+| **数据清理** | `0 3 * * *` | `db_service` | 每天 03:00 清理过期数据（默认保留 30 天） |
+
+---
+
 ## 📰 信息源
 
 当前已配置 **35 个**信息源，覆盖以下类别：
@@ -243,12 +254,69 @@ DeepCurrents/
 
 ---
 
+## 🧪 集成测试
+
+使用 `pytest` 验证各组件的联通性与逻辑一致性：
+
+```bash
+uv run pytest                     # 运行全部测试
+uv run pytest tests/test_collector.py   # 仅测试采集器
+uv run pytest tests/test_ai_service.py  # 仅测试 AI 服务
+uv run pytest tests/test_scorer.py      # 仅测试评分系统
+```
+
+### 🛠️ 运维拨测工具 (Test Tools)
+
+除了自动化测试，本项目提供了一个专为日常运维设计的拨测工具 `src/test_tools.py`，支持快速验证生产环境的各项连通性：
+
+```bash
+# 查看帮助
+uv run python -m src.test_tools --help
+
+# 并发验证所有 35+ 个信息源 (RSS/RSSHub) 的联通性
+uv run python -m src.test_tools --rss
+
+# 测试 AI (LLM) 服务是否可用且响应正常
+uv run python -m src.test_tools --llm
+
+# 发送测试研报到飞书和 Telegram (验证 Webhook 和 Bot 配置)
+uv run python -m src.test_tools --feishu
+uv run python -m src.test_tools --tg
+
+# 测试 yfinance 行情数据抓取
+uv run python -m src.test_tools --market
+
+# 一键运行全量拨测
+uv run python -m src.test_tools --all
+```
+
+### 💡 高级测试技巧
+
+- **详细日志模式**: `uv run pytest -s` (输出测试中的 print 和 log 内容)。
+- **失败即停止**: `uv run pytest -x` (遇到第一个失败的测试用例立即停止)。
+- **运行特定测试**: `uv run pytest -k "collector"` (运行所有文件名或函数名包含 "collector" 的测试)。
+- **跳过慢速测试**: 部分涉及 AI 生成的测试较慢，可以使用 `uv run pytest -m "not slow"` (如果配置了 marker)。
+
+### 🌐 网络、代理与 Telegram 访问
+
+由于 Telegram (Bot API 及 RSS 源) 在部分地区访问受限，请务必注意：
+
+1.  **推送代理**: 本系统已集成 `HTTPS_PROXY` 支持。如果 Telegram 推送失败，请在 `.env` 中配置代理地址（支持 HTTP/HTTPS/SOCKS5）。
+2.  **RSSHub 调优**: 
+    - 公共实例 `rsshub.app` 对 Telegram/Twitter 抓取限制极严，经常返回 403。
+    - **强烈建议自建**: 使用 `docker compose up -d rsshub redis` 启动本地实例。
+    - **配置指向**: 在 `.env` 中设置 `RSSHUB_BASE_URL=http://localhost:1200`，系统将自动完成 URL 替换。
+
+---
+
 ## ⚙️ 核心参数调优
 
 所有参数均在 `.env` 中配置，附带合理默认值：
 
 | 参数 | 默认值 | 说明 |
 | :--- | :--- | :--- |
+| `HTTPS_PROXY` | `""` | 全局代理地址 (支持 http:// 或 socks5://) |
+| `RSSHUB_BASE_URL` | `""` | 自建 RSSHub 地址 (例如 http://localhost:1200) |
 | `AI_MAX_CONTEXT_TOKENS` | `16000` | AI 上下文 Token 预算 |
 | `DEDUP_SIMILARITY_THRESHOLD` | `0.55` | 标题去重相似度阈值 |
 | `CLUSTER_SIMILARITY_THRESHOLD` | `0.3` | 新闻聚类 Jaccard 阈值 |
