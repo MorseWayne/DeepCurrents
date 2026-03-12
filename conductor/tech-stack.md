@@ -22,4 +22,22 @@
 ## 运维、调度与可观测性
 - **Node-cron**：负责定时采集（CRON_COLLECT）、研报合成（CRON_REPORT）和数据清理（CRON_CLEANUP）。
 - **Pino & Pino-pretty**：结构化日志系统，支持终端彩色输出与本地日志文件落盘。
-- **Axios**：具备请求超时和重试逻辑的 HTTP 客户端。
+- **Axios**：具备请求超时和重试逻辑合作的 HTTP 客户端。
+
+---
+
+## 🐍 提议的 Python 重写技术栈 (Proposed Python Stack)
+*针对 100% Python 重写方案的选型映射*
+
+| 组件 | Node.js / TypeScript | Python 替代方案 |
+| :--- | :--- | :--- |
+| **异步运行时** | Node.js Event Loop | `asyncio` |
+| **网络请求** | `axios` / `rss-parser` | `aiohttp` (抓取) / `httpx` (API) |
+| **并发控制** | `p-limit` | `asyncio.Semaphore` |
+| **数据验证** | `Zod` | `Pydantic v2` |
+| **数据库** | `better-sqlite3` | `aiosqlite` (异步) 或 `sqlite3` |
+| **调度器** | `node-cron` | `APScheduler` (AsyncIOScheduler) |
+| **分词/NLP** | `Intl.Segmenter` | `jieba` (中文) / `nltk` (英文) |
+| **日志** | `Pino` | `structlog` 或 `loguru` |
+| **AI 接口** | OpenAI SDK (JS) | OpenAI SDK (Python) |
+
