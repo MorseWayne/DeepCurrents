@@ -5,6 +5,7 @@ from .services.db_service import DBService
 from .services.collector import RSSCollector
 from .services.ai_service import AIService
 from .services.scorer import PredictionScorer
+from .services.notifier import Notifier
 from .services.clustering import cluster_news, NewsItemForClustering
 from .services.classifier import classify_threat
 from .utils.logger import get_logger
@@ -17,6 +18,7 @@ class DeepCurrentsEngine:
         self.collector = RSSCollector(self.db)
         self.ai = AIService(self.db)
         self.scorer = PredictionScorer(self.db)
+        self.notifier = Notifier()
 
     async def start(self):
         await self.db.connect()
@@ -59,11 +61,12 @@ class DeepCurrentsEngine:
             report = await self.ai.generate_daily_report(raw_news, clusters)
             logger.info(f"成功生成研报: {report.date}")
 
-            # 4. 标记为已报告
+            # 4. 推送通知
+            await self.notifier.deliver_all(report, len(raw_news), len(clusters))
+            logger.info("✅ 研报投递完成。")
+
+            # 5. 标记为已报告
             await self.db.mark_as_reported([n.id for n in raw_news])
-            
-            # 5. TODO: 发送通知 (Phase 6 任务 2)
-            logger.info("研报已准备就绪，准备发送通知...")
             
         except Exception as e:
             logger.error(f"研报任务失败: {e}")
