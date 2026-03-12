@@ -11,6 +11,7 @@ import { getMarketPrice } from './utils/market-data';
 
 import { DBService, NewsRecord } from './services/db.service';
 import { AIService } from './services/ai.service';
+import { PredictionScorer } from './services/scorer';
 
 dotenv.config();
 
@@ -315,6 +316,16 @@ export class TestSuite {
     }
   }
 
+  /**
+   * 测试自动评分逻辑
+   */
+  public async testScoringLogic() {
+    logger.info("--- 开始测试自动评分逻辑 ---");
+    const scorer = new PredictionScorer();
+    await scorer.runScoringTask();
+    logger.info("✅ 评分逻辑测试运行完成");
+  }
+
   public async runAll() {
     await this.testRSS();
     console.log("\n");
@@ -348,6 +359,7 @@ const TEST_CATEGORIES: Record<string, (tester: TestSuite) => Promise<void>> = {
   'market-data': (t) => t.testMarketData(),
   'db-predictions': (t) => t.testDatabasePredictions(),
   'multi-agent-report': (t) => t.testMultiAgentReport(),
+  'scoring-task': (t) => t.testScoringLogic(),
   feishu: (t) => t.testFeishu(),
   telegram: (t) => t.testTelegram(),
 };

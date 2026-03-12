@@ -74,6 +74,10 @@ const DailyReportSchema = z.object({
   geopoliticalBriefing: z.string().optional(),
   economicAnalysis: z.string(),
   investmentTrends: z.array(InvestmentTrendSchema),
+  agentInsights: z.object({
+    macro: z.string().optional(),
+    sentiment: z.string().optional()
+  }).optional(),
   trendingAlerts: z.array(TrendingAlertSchema).optional(),
   keyDataPoints: z.array(KeyDataPointSchema).optional(),
   riskAssessment: z.string().optional(),
@@ -226,18 +230,21 @@ ${marketPriceContext}
 
       try {
         const model = process.env[provider.envModel] || provider.defaultModel;
+
+        // 对 MarketStrategist 采取更宽松的格式要求以增加稳定性
+        const useJsonFormat = agentName !== 'MarketStrategist';
+
         const response = await axios.post(apiUrl, {
           model,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userContent }
           ],
-          response_format: { type: "json_object" }
+          ...(useJsonFormat ? { response_format: { type: "json_object" } } : {})
         }, {
           headers: { 'Authorization': `Bearer ${apiKey}` },
           timeout: CONFIG.AI_TIMEOUT_MS,
         });
-
         const raw = response.data.choices[0].message.content;
         logger.info(`[AIService] ${agentName} 调用 (${provider.name}) 成功`);
         return raw;
@@ -272,11 +279,16 @@ ${marketPriceContext}
     if (!report.investmentTrends) return;
     
     for (const trend of report.investmentTrends) {
-      // 简单资产映射（模糊匹配，生产环境应通过更严谨的映射表）
-      const priceData = prices.find(p => 
-        trend.assetClass.toLowerCase().includes(p.symbol.replace('=F', '').toLowerCase()) ||
-        (p.symbol === '^GSPC' && trend.assetClass.toLowerCase().includes('stock'))
-      );
+      const assetLower = trend.assetClass.toLowerCase();
+      // 增强型资产映射
+      const priceData = prices.find(p => {
+        const symbolBase = p.symbol.replace('=F', '').toLowerCase();
+        if (assetLower.includes(symbolBase)) return true;
+        if (p.symbol === 'GC=F' && (assetLower.includes('黄金') || assetLower.includes('gold'))) return true;
+        if (p.symbol === 'CL=F' && (assetLower.includes('原油') || assetLower.includes('oil'))) return true;
+        if (p.symbol === '^GSPC' && (assetLower.includes('股票') || assetLower.includes('stock') || assetLower.includes('标普'))) return true;
+        return false;
+      });
 
       if (priceData) {
         this.db.savePrediction({
@@ -286,6 +298,7 @@ ${marketPriceContext}
           price: priceData.price,
           timestamp: new Date().toISOString()
         });
+        logger.info(`[AIService] 已保存 ${priceData.symbol} 的预测记录`);
       }
     }
   }

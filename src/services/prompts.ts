@@ -30,6 +30,10 @@ export const REPORT_JSON_SCHEMA = `
       "timeframe": "short-term/medium-term/long-term"
     }
   ],
+  "agentInsights": {
+    "macro": "总结宏观分析师的核心观点",
+    "sentiment": "总结情绪分析师的核心观点"
+  },
   "trendingAlerts": [{ "term": "关键词", "assessment": "影响分析", "significance": "high/medium/low" }],
   "keyDataPoints": [{ "metric": "指标", "value": "数值", "implication": "含义" }],
   "riskAssessment": "全球风险格局评估",
