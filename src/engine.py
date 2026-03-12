@@ -36,14 +36,14 @@ class DeepCurrentsEngine:
         except Exception as e:
             logger.error(f"采集任务失败: {e}")
 
-    async def generate_and_send_report(self):
+    async def generate_and_send_report(self, skip_push: bool = False, skip_mark: bool = False):
         """生成并发送研报"""
         try:
             # 1. 获取未报告新闻
             raw_news = await self.db.get_unreported_news()
             if not raw_news:
                 logger.info("没有新的新闻需要报告。")
-                return
+                return None
 
             # 2. 执行分类与聚类
             items_for_clustering = []
@@ -62,14 +62,17 @@ class DeepCurrentsEngine:
             logger.info(f"成功生成研报: {report.date}")
 
             # 4. 推送通知
-            await self.notifier.deliver_all(report, len(raw_news), len(clusters))
-            logger.info("✅ 研报投递完成。")
+            if not skip_push:
+                await self.notifier.deliver_all(report, len(raw_news), len(clusters))
+                logger.info("✅ 研报投递完成。")
+            else:
+                logger.info("已跳过通知推送。")
 
             # 5. 标记为已报告
-            await self.db.mark_as_reported([n.id for n in raw_news])
+            if not skip_mark:
+                await self.db.mark_as_reported([n.id for n in raw_news])
             
-        except Exception as e:
-            logger.error(f"研报任务失败: {e}")
+            return report
 
     async def cleanup(self):
         """清理过期数据"""
