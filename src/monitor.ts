@@ -10,6 +10,7 @@ import { classifyThreat, THREAT_LABELS, ThreatClassification } from './services/
 import { RSSCircuitBreaker } from './services/circuit-breaker';
 import { clusterNews, ClusteredEvent, NewsItemForClustering } from './services/clustering';
 import { ingestHeadlines, detectSpikes, getTrackedTermCount } from './services/trending';
+import { PredictionScorer } from './services/scorer';
 import { Extractor } from './utils/extractor';
 import { getLogger } from './utils/logger';
 
@@ -71,6 +72,7 @@ export class DeepCurrentsEngine {
   private parser = new Parser({ timeout: CONFIG.RSS_TIMEOUT_MS });
   private ai = new AIService();
   private db = new DBService();
+  private scorer = new PredictionScorer();
   private breaker = new RSSCircuitBreaker({
     maxFailures: CONFIG.CB_MAX_FAILURES,
     cooldownMs: CONFIG.CB_COOLDOWN_MS,
@@ -97,6 +99,11 @@ export class DeepCurrentsEngine {
         await this.generateAndSendReport();
       }),
 
+      cron.schedule('0 */4 * * *', async () => {
+        logger.info("[Scorer] 正在运行预测评分任务...");
+        await this.scorer.runScoringTask();
+      }),
+
       cron.schedule(CONFIG.CRON_CLEANUP, () => {
         const cleaned = this.db.cleanup();
         if (cleaned > 0) logger.info(`[Cleanup] 清理了 ${cleaned} 条过期数据`);
@@ -108,8 +115,9 @@ export class DeepCurrentsEngine {
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
 
-    // 首次启动立即执行
+    // 首次启动立即执行一次采集和评分
     this.collectData();
+    this.scorer.runScoringTask();
   }
 
   private shutdown() {

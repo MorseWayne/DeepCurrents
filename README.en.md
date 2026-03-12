@@ -40,7 +40,8 @@ Built for macro investors, geopolitical analysts, and anyone who needs to cut th
 
 - **Node.js** >= 18.x
 - **npm** >= 9.x
-- An AI API key compatible with the OpenAI interface (OpenAI, Groq, OpenRouter, etc.)
+- **Python** >= 3.10 (Required for `yfinance` market data)
+- An AI API key compatible with the OpenAI interface
 
 ### 1. Clone
 
@@ -49,10 +50,15 @@ git clone https://github.com/your-username/DeepCurrents.git
 cd DeepCurrents
 ```
 
-### 2. Install
+### 2. Initialize Environments (Node.js & Python)
 
 ```bash
+# Install Node.js dependencies
 npm install
+
+# Initialize Python virtual environment and install yfinance
+python3 -m venv venv
+./venv/bin/pip install yfinance
 ```
 
 ### 3. Configure
@@ -309,9 +315,10 @@ npm run test:telegram   # Telegram notification
 ## 📅 Scheduling
 
 | Task | Default Cron | Env Var | Description |
-|------|-------------|---------|-------------|
+| :--- | :--- | :--- | :--- |
 | **Collection** | `0 * * * *` | `CRON_COLLECT` | Hourly scan all RSS sources, dedup and store |
 | **Report** | `0 8 * * *` | `CRON_REPORT` | Daily synthesis and delivery |
+| **Scoring** | `0 */4 * * *` | — | Backtest past AI predictions every 4 hours |
 | **Cleanup** | `0 3 * * *` | `CRON_CLEANUP` | Purge expired data (default 30 days) |
 
 ---
