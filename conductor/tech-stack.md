@@ -15,6 +15,7 @@
 
 ## AI 推理与分析逻辑
 - **LLM Reasoning (OpenAI 兼容接口)**：核心 AI 引擎，驱动事件聚类、威胁分类、趋势检测及最终的研报合成。
+- **Market Data SDK (Planned)**: 计划引入 `Alpha Vantage` 或 `yfinance` 等数据接口，用于辅助 AI 进行量化价格与宏观数据的交叉验证。
 
 ## 运维、调度与可观测性
 - **Node-cron**：负责定时采集（CRON_COLLECT）、研报合成（CRON_REPORT）和数据清理（CRON_CLEANUP）。
