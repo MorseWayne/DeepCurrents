@@ -29,7 +29,10 @@ services:
       - REDIS_URL=redis://127.0.0.1:6379/
       - TWITTER_AUTH_TOKEN=${TWITTER_AUTH_TOKEN:-}
       # 代理设置：让 RSSHub 容器能通过宿主机代理访问受限资源 (如 Telegram)
-      - PROXY=${HTTPS_PROXY:-} 
+      - PROXY=${HTTPS_PROXY:-}
+      - HTTP_PROXY=${HTTPS_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NODE_USE_ENV_PROXY=1
     depends_on:
       - redis
 
