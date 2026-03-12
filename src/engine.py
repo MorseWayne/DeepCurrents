@@ -73,6 +73,9 @@ class DeepCurrentsEngine:
                 await self.db.mark_as_reported([n.id for n in raw_news])
             
             return report
+        except Exception as e:
+            logger.error(f"研报生成任务失败: {e}")
+            return None
 
     async def cleanup(self):
         """清理过期数据"""

@@ -21,14 +21,15 @@ services:
     image: diygod/rsshub:latest
     container_name: rsshub
     restart: always
-    network_mode: host  # 启用宿主机网络
-    # 注意：ports 选项在 host 模式下会被忽略，建议删除以保持配置整洁
+    network_mode: host  # 启用宿主机网络，便于共享宿主机网络连通性
     environment:
       - NODE_ENV=production
       - CACHE_TYPE=redis
       # 关键：访问 redis 需改用 localhost
       - REDIS_URL=redis://127.0.0.1:6379/
       - TWITTER_AUTH_TOKEN=${TWITTER_AUTH_TOKEN:-}
+      # 代理设置：让 RSSHub 容器能通过宿主机代理访问受限资源 (如 Telegram)
+      - PROXY=${HTTPS_PROXY:-} 
     depends_on:
       - redis
 
