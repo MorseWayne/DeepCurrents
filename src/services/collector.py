@@ -19,6 +19,9 @@ class RSSCollector:
             cooldown_ms=CONFIG.cb_cooldown_ms
         )
         self.semaphore = asyncio.Semaphore(CONFIG.rss_concurrency)
+        self.retry_statuses = {429, 500, 502, 503, 504}
+        self.max_retries = 2
+        self.retry_base_delay = 0.8
 
     async def collect_all(self) -> Dict[str, int]:
         """执行全量抓取任务"""
@@ -34,7 +37,7 @@ class RSSCollector:
             results = await asyncio.gather(*tasks)
         
         total_new = sum(r.get('new_count', 0) for r in results)
-        total_errors = sum(1 for r in results if r.get('error'))
+        total_errors = sum(1 for r in results if "error" in r)
         total_skipped = sum(1 for r in results if r.get('skipped'))
         
         logger.info(f"[采集完成] 新增 {total_new} | 跳过 {total_skipped} | 错误 {total_errors}")
@@ -55,10 +58,50 @@ class RSSCollector:
             active_session = session or aiohttp.ClientSession()
             try:
                 url = resolve_source_url(source)
-                async with active_session.get(url, timeout=CONFIG.rss_timeout_ms / 1000) as response:
-                    if response.status != 200:
-                        raise Exception(f"HTTP {response.status}")
-                    content = await response.text()
+                proxy = CONFIG.https_proxy if CONFIG.https_proxy else None
+                content = None
+
+                for attempt in range(self.max_retries + 1):
+                    try:
+                        async with active_session.get(
+                            url,
+                            timeout=CONFIG.rss_timeout_ms / 1000,
+                            proxy=proxy
+                        ) as response:
+                            if response.status == 200:
+                                content = await response.text()
+                                break
+
+                            if response.status in self.retry_statuses and attempt < self.max_retries:
+                                delay = self.retry_base_delay * (2 ** attempt)
+                                logger.warning(
+                                    f"⏳ [RSS] T{source.tier} {source.name} 返回 HTTP {response.status}，"
+                                    f"{delay:.1f}s 后重试 ({attempt + 1}/{self.max_retries})"
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+
+                            raise RuntimeError(f"HTTP {response.status}")
+                    except (
+                        asyncio.TimeoutError,
+                        aiohttp.ClientConnectionError,
+                        aiohttp.ServerDisconnectedError,
+                        aiohttp.ClientOSError,
+                    ) as e:
+                        if attempt < self.max_retries:
+                            delay = self.retry_base_delay * (2 ** attempt)
+                            logger.warning(
+                                f"⏳ [RSS] T{source.tier} {source.name} 请求异常: {str(e)}，"
+                                f"{delay:.1f}s 后重试 ({attempt + 1}/{self.max_retries})"
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        raise
+                    except aiohttp.ClientError:
+                        raise
+
+                if content is None:
+                    raise RuntimeError("Empty response content after retries")
                 
                 feed = feedparser.parse(content)
                 new_count = 0
@@ -77,7 +120,7 @@ class RSSCollector:
 
                     # 高优源尝试全文提取
                     if source.tier <= 2:
-                        extracted = await Extractor.extract(link, session=active_session)
+                        extracted = await Extractor.extract(link, session=active_session, proxy=proxy)
                         if extracted and len(extracted['content']) > len(final_content):
                             final_content = extracted['content']
 
@@ -100,8 +143,9 @@ class RSSCollector:
 
             except Exception as e:
                 self.breaker.record_failure(source.name)
-                logger.error(f"[ERR] T{source.tier} {source.name}: {e}")
-                return {"error": str(e)}
+                err = str(e).strip() or e.__class__.__name__
+                logger.error(f"[ERR] T{source.tier} {source.name}: {err}")
+                return {"error": err}
             finally:
                 if managed_session:
                     await active_session.close()

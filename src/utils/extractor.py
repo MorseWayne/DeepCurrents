@@ -10,13 +10,14 @@ class Extractor:
     async def extract(
         url: str,
         max_length: int = 5000,
-        session: Optional[aiohttp.ClientSession] = None
+        session: Optional[aiohttp.ClientSession] = None,
+        proxy: Optional[str] = None
     ) -> Optional[Dict[str, str]]:
         """提取网页正文"""
         try:
             managed_session = session is None
             active_session = session or aiohttp.ClientSession()
-            async with active_session.get(url, timeout=15) as response:
+            async with active_session.get(url, timeout=15, proxy=proxy) as response:
                 if response.status != 200:
                     return None
                 html = await response.text()

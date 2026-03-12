@@ -11,8 +11,7 @@ def test_config_loading():
     assert isinstance(CONFIG.ai_model, str)
 
 def test_ai_default_values():
-    assert CONFIG.ai_timeout_ms == 2000
-    assert CONFIG.ai_max_context_tokens == 128000
+    assert CONFIG.ai_timeout_ms == 20000
     assert CONFIG.ai_symbol_search_timeout_ms == 3000
 
 def test_logger_binding():

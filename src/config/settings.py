@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     ai_fallback_url: str = Field(default='', validation_alias='AI_FALLBACK_URL')
     ai_fallback_key: str = Field(default='', validation_alias='AI_FALLBACK_KEY')
     ai_fallback_model: str = Field(default='gpt-4o-mini', validation_alias='AI_FALLBACK_MODEL')
-    ai_timeout_ms: int = Field(default=2000, validation_alias='AI_TIMEOUT_MS')
+    ai_timeout_ms: int = Field(default=20000, validation_alias='AI_TIMEOUT_MS')
     ai_max_context_tokens: int = Field(default=128000, validation_alias='AI_MAX_CONTEXT_TOKENS')
     ai_use_realtime_market_context: bool = Field(default=True, validation_alias='AI_USE_REALTIME_MARKET_CONTEXT')
     ai_market_context_symbols_limit: int = Field(default=6, validation_alias='AI_MARKET_CONTEXT_SYMBOLS_LIMIT')
