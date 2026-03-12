@@ -157,20 +157,22 @@ export function generateClusterContext(clusters: ClusteredEvent[]): string {
   const lines: string[] = ['[CLUSTERED EVENTS — Multi-source confirmed macro events]'];
   const top = clusters.slice(0, 15);
 
-  for (const cluster of top) {
+  for (const [i, cluster] of top.entries()) {
+    const idx = i + 1;
     const sourceInfo = cluster.sourceCount > 1 ? ` (${cluster.sourceCount} independent sources)` : '';
     const threatTag = cluster.threat.level !== 'info' ? ` [${cluster.threat.level.toUpperCase()}]` : '';
-    lines.push(`- ${cluster.primaryTitle}${threatTag}${sourceInfo}`);
+    lines.push(`${idx}. ${cluster.primaryTitle}${threatTag}${sourceInfo}`);
 
     if (cluster.sources.length > 1) {
-      const sourceNames = cluster.sources.slice(0, 4).map(s => `${s.name}(T${s.tier})`).join(', ');
-      lines.push(`  Sources: ${sourceNames}`);
+      const sourceNames = cluster.sources.slice(0, 5).map(s => `${s.name}(T${s.tier})`).join(', ');
+      lines.push(`   Sources: ${sourceNames}`);
     }
 
+    // 提取正文摘要（如果存在），增强 AI 因果推断能力
     const primaryItem = cluster.allItems[0];
     if (primaryItem?.content && primaryItem.content.length > 80) {
-      const excerpt = primaryItem.content.substring(0, 250).replace(/\s+/g, ' ').trim();
-      lines.push(`  Context: ${excerpt}`);
+      const excerpt = primaryItem.content.substring(0, 350).replace(/\s+/g, ' ').trim();
+      lines.push(`   ▸ ${excerpt}`);
     }
   }
 
