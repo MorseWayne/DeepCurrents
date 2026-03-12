@@ -5,7 +5,7 @@ WORKDIR /app
 
 # 仅复制依赖文件以利用缓存
 COPY requirements.txt .
-RUN uv pip install --no-cache -r requirements.txt
+RUN uv pip install --system --no-cache -r requirements.txt
 
 # 最终运行阶段
 FROM python:3.12-alpine
