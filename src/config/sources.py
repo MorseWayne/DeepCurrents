@@ -74,7 +74,7 @@ SOURCES: List[Source] = [
 
     # ── 🔌 RSSHub 扩展: 中文财经 ──
     Source(name='财联社电报', url='https://rsshub.app/cls/telegraph', category='Economics', tier=2, type='market', is_rss_hub=True),
-    Source(name='金十数据', url='https://rsshub.app/jin10/flash', category='Economics', tier=2, type='market', is_rss_hub=True),
+    Source(name='金十数据', url='https://rsshub.app/jin10', category='Economics', tier=2, type='market', is_rss_hub=True, note='flash 路由易空数据返回 503，改用稳定主路由'),
     Source(name='格隆汇', url='https://rsshub.app/gelonghui/live', category='Economics', tier=3, type='market', is_rss_hub=True),
 
     # ── 🔌 RSSHub 扩展: 亚太 & 中文媒体 ──

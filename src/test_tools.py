@@ -25,15 +25,19 @@ class TestSuite:
     def __init__(self):
         self.notifier = Notifier()
         self.ai_service = AIService()
+        self.rss_retry_statuses = {429, 500, 502, 503, 504}
+        self.rss_max_retries = 2
+        self.rss_retry_base_delay = 0.8
 
     async def test_rss(self, all_sources: bool = True):
         """测试 RSS 源联通性"""
         targets = SOURCES if all_sources else SOURCES[:5]
         logger.info(f"--- 开始测试 RSS 信息源 (共 {len(targets)} 个) ---")
-        
-        async with aiohttp.ClientSession() as session:
+
+        timeout = aiohttp.ClientTimeout(total=CONFIG.rss_timeout_ms / 1000)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             # 使用信号量限制并发，防止被封 IP
-            sem = asyncio.Semaphore(10)
+            sem = asyncio.Semaphore(CONFIG.rss_concurrency)
             async def sem_check(s):
                 async with sem:
                     return await self._check_one_rss(session, s)
@@ -55,27 +59,71 @@ class TestSuite:
         
         type_label = "[RSSHub]" if source.is_rss_hub else "[RSS]"
         proxy = CONFIG.https_proxy if CONFIG.https_proxy else None
-        
-        try:
-            # aiohttp 仅原生支持 http 代理，如果是 socks5 需要 aiohttp-socks
-            # 这里先尝试标准代理传参
-            async with session.get(url, timeout=15, proxy=proxy) as resp:
-                if resp.status != 200:
+
+        for attempt in range(self.rss_max_retries + 1):
+            try:
+                # aiohttp 仅原生支持 http 代理，如果是 socks5 需要 aiohttp-socks
+                # 这里先尝试标准代理传参
+                async with session.get(url, timeout=15, proxy=proxy) as resp:
+                    if resp.status == 200:
+                        content = await resp.text()
+                        feed = feedparser.parse(content)
+                        if feed.bozo and not feed.entries:
+                            logger.error(f"❌ {type_label} T{source.tier} {source.name} 失败: 解析错误且无条目")
+                            return False
+
+                        logger.info(f"✅ {type_label} T{source.tier} {source.name}: {len(feed.entries)} 条新闻")
+                        return True
+
+                    if resp.status in self.rss_retry_statuses and attempt < self.rss_max_retries:
+                        delay = self.rss_retry_base_delay * (2 ** attempt)
+                        logger.warning(
+                            f"⏳ {type_label} T{source.tier} {source.name} 返回 HTTP {resp.status}，"
+                            f"{delay:.1f}s 后重试 ({attempt + 1}/{self.rss_max_retries})"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
                     logger.error(f"❌ {type_label} T{source.tier} {source.name} 失败: HTTP {resp.status}")
                     return False
-                content = await resp.text()
-                feed = feedparser.parse(content)
-                if feed.bozo:
-                    # 某些源可能有解析警告但仍然有内容
-                    if not feed.entries:
-                        logger.error(f"❌ {type_label} T{source.tier} {source.name} 失败: 解析错误且无条目")
-                        return False
-                
-                logger.info(f"✅ {type_label} T{source.tier} {source.name}: {len(feed.entries)} 条新闻")
-                return True
-        except Exception as e:
-            logger.error(f"❌ {type_label} T{source.tier} {source.name} 失败: {str(e)}")
-            return False
+
+            except aiohttp.ClientResponseError as e:
+                if e.status in self.rss_retry_statuses and attempt < self.rss_max_retries:
+                    delay = self.rss_retry_base_delay * (2 ** attempt)
+                    logger.warning(
+                        f"⏳ {type_label} T{source.tier} {source.name} 返回 HTTP {e.status}，"
+                        f"{delay:.1f}s 后重试 ({attempt + 1}/{self.rss_max_retries})"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                logger.error(f"❌ {type_label} T{source.tier} {source.name} 失败: {str(e)}")
+                return False
+            except (
+                asyncio.TimeoutError,
+                aiohttp.ClientConnectionError,
+                aiohttp.ServerDisconnectedError,
+                aiohttp.ClientOSError,
+            ) as e:
+                if attempt < self.rss_max_retries:
+                    delay = self.rss_retry_base_delay * (2 ** attempt)
+                    logger.warning(
+                        f"⏳ {type_label} T{source.tier} {source.name} 请求异常: {str(e)}，"
+                        f"{delay:.1f}s 后重试 ({attempt + 1}/{self.rss_max_retries})"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                logger.error(f"❌ {type_label} T{source.tier} {source.name} 失败: {str(e)}")
+                return False
+            except aiohttp.ClientError as e:
+                logger.error(f"❌ {type_label} T{source.tier} {source.name} 失败: {str(e)}")
+                return False
+            except Exception as e:
+                logger.error(f"❌ {type_label} T{source.tier} {source.name} 失败: {str(e)}")
+                return False
+
+        return False
 
     async def test_llm(self):
         """测试 LLM 联通性"""
