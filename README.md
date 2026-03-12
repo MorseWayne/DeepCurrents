@@ -320,7 +320,7 @@ uv run python -m src.test_tools --all
 | :--- | :--- | :--- |
 | `HTTPS_PROXY` | `""` | 全局代理地址 (支持 http:// 或 socks5://) |
 | `RSSHUB_BASE_URL` | `""` | 自建 RSSHub 地址 (例如 http://localhost:1200) |
-| `AI_MAX_CONTEXT_TOKENS` | `16000` | AI 上下文 Token 预算 |
+| `AI_MAX_CONTEXT_TOKENS` | `128000` | AI 上下文 Token 预算 |
 | `DEDUP_SIMILARITY_THRESHOLD` | `0.55` | 标题去重相似度阈值 |
 | `CLUSTER_SIMILARITY_THRESHOLD` | `0.3` | 新闻聚类 Jaccard 阈值 |
 | `RSS_CONCURRENCY` | `10` | 异步采集并发限制 |
