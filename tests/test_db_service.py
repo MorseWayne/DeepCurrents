@@ -1,9 +1,10 @@
 import pytest
+import pytest_asyncio
 import os
 import asyncio
 from src.services.db_service import DBService, NewsRecord
 
-@pytest.fixture(scope="function")
+@pytest_asyncio.fixture(scope="function")
 async def db_service():
     db_path = "data/test_intel.db"
     if os.path.exists(db_path):

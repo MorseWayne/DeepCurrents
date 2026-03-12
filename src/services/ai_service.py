@@ -160,14 +160,58 @@ class AIService:
 
 请根据以上背景，撰写最终机构级研报。
 """
-        final_raw = await self.call_agent("MarketStrategist", MARKET_STRATEGIST_PROMPT, final_strategist_input, use_json=False)
-        parsed_json = json.loads(extract_json(final_raw))
+        final_raw = await self.call_agent("MarketStrategist", MARKET_STRATEGIST_PROMPT, final_strategist_input, use_json=True)
+        parsed_json = await self.parse_daily_report_json(final_raw)
         report = DailyReport(**parsed_json)
         
         # ── 预测持久化逻辑预留 ──
         # await self._persist_predictions(report)
 
         return report
+
+    async def parse_daily_report_json(self, raw_text: str) -> Dict[str, Any]:
+        """解析日报 JSON；若失败，自动触发一次修复重试。"""
+        try:
+            return json.loads(extract_json(raw_text))
+        except json.JSONDecodeError as e:
+            logger.warning(f"MarketStrategist JSON 解析失败，尝试修复: {e}")
+
+        repaired_raw = await self.repair_daily_report_json(raw_text)
+        try:
+            return json.loads(extract_json(repaired_raw))
+        except json.JSONDecodeError as e:
+            snippet = extract_json(repaired_raw)[:400].replace('\n', ' ')
+            raise ValueError(f"MarketStrategist JSON 修复后仍非法: {e}. snippet={snippet}") from e
+
+    async def repair_daily_report_json(self, broken_raw: str) -> str:
+        """调用 LLM 将无效输出修复为合法 JSON 对象。"""
+        repair_system_prompt = (
+            "你是一个严格的 JSON 修复器。"
+            "你只能输出一个合法 JSON 对象，不得输出 Markdown、注释、解释文字。"
+        )
+        schema_hint = (
+            "必须保留/补全字段: "
+            "date(string), intelligenceDigest(array), executiveSummary(string), "
+            "globalEvents(array), economicAnalysis(string), investmentTrends(array)。"
+            "可选字段: agentInsights(object), riskAssessment(string), sourceAnalysis(string)。"
+        )
+        safe_raw = truncate_to_token_budget(broken_raw, max_tokens=4000)
+        repair_user_content = f"""
+原始输出不是合法 JSON，请修复。
+
+{schema_hint}
+
+[BROKEN_OUTPUT]
+```text
+{safe_raw}
+```
+"""
+        return await self.call_agent(
+            "MarketStrategistRepair",
+            repair_system_prompt,
+            repair_user_content,
+            use_json=True
+        )
 
     async def call_agent(self, name: str, system_prompt: str, user_content: str, use_json: bool = True) -> str:
         """调用 AI 模型（含回退逻辑）"""
@@ -191,7 +235,7 @@ class AIService:
                     timeout=CONFIG.ai_timeout_ms / 1000
                 )
                 logger.info(f"{name} 调用成功 (Model: {p['model']})")
-                return response.choices[0].message.content
+                return response.choices[0].message.content or ""
             except Exception as e:
                 logger.warning(f"{name} 调用失败 ({p['model']}): {e}")
                 continue

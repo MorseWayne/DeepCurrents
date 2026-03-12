@@ -29,7 +29,7 @@ async def run_report(args):
             return
 
         # 3. 输出处理
-        report_dict = report.dict()
+        report_dict = report.model_dump()
         
         if args.json:
             output_text = json.dumps(report_dict, indent=2, ensure_ascii=False)

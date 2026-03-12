@@ -1,10 +1,11 @@
 import pytest
+import pytest_asyncio
 import asyncio
 import os
 from unittest.mock import MagicMock, AsyncMock, patch
 from src.engine import DeepCurrentsEngine
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def engine():
     with patch('src.services.db_service.DBService.connect', new_callable=AsyncMock):
         with patch('src.services.db_service.DBService.close', new_callable=AsyncMock):

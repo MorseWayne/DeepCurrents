@@ -1,282 +1,189 @@
 # DeepCurrents (深流) 技术设计文档
 
-**版本**: v2.1  
-**状态**: 生产就绪 (Production Ready)  
-**定位**: AI 驱动的全球情报聚合与宏观战略研报引擎
+**版本**: v2.2 (Python)  
+**状态**: 可运行 / 持续迭代中  
+**定位**: AI 驱动的全球情报聚合与宏观策略研报引擎
 
 ---
 
-## 1. 系统概述 (System Overview)
+## 1. 系统概述
 
-DeepCurrents 是一个高性能的宏观情报系统，旨在从全球 30+ 个顶级资讯源中提取碎片化信息，并通过 AI 推理引擎将其转化为深度的宏观经济与投资策略报告。其核心逻辑在于：**从"新闻浪花"中识别底层的"宏观深流"**。
+DeepCurrents 从多源 RSS/RSSHub 信息流中抓取新闻，进行去重、威胁分类、事件聚类，并通过多智能体 LLM 流程生成每日结构化研报，再投递到飞书与 Telegram。
 
-### 1.1 v2.1 核心改进
-
-| 特性 | v1.0 | v2.1 | v2.2 |
-|------|------|------|------|
-| 标题去重 | 精确匹配 | trigram Dice + word Jaccard 模糊去重 | — |
-| AI 架构 | 单一 Prompt 调用 | — | 多智能体协作流 (Macro/Sentiment/Strategist) |
-| 行情数据 | 无 | — | yfinance 实时注入 (Gold/Oil/S&P) |
-| 预测验证 | 无 | — | 自动记录研判 + 事后 Scorer 自动评分 |
-| AI 上下文 | 硬截断 12000 字符 | Token 预算分配 | — |
-
-## 2. 系统架构 (System Architecture)
-
-系统采用模块化设计，分为五个核心层：
-
-### 2.1 数据收集层 (Collector Layer)
-
-* **组件**: `DeepCurrentsEngine` + `rss-parser` + `RSSCircuitBreaker`
-* **逻辑**:
-  * 通过 `node-cron` 调度，默认每小时运行一次（可配 `CRON_COLLECT`）。
-  * 使用 `p-limit` 限制并发抓取（默认 10，可配 `RSS_CONCURRENCY`），保护上游源。
-  * **熔断器**: 每个源独立计数连续失败次数，超过阈值（可配 `CB_MAX_FAILURES`）自动进入冷却期，冷却期返回缓存数据。
-  * **RSSHub 路由解析**: 对标记 `isRssHub` 的源，运行时通过 `resolveSourceUrl()` 将公共域名切换为 `RSSHUB_BASE_URL`（如自建 RSSHub）。
-  * 源按 tier 优先级排序处理，T1（通讯社）优先于 T4（聚合器）。
-  * **全文补全**: 对 T1/T2 高质量源尝试使用 `utils/extractor.ts`（Mozilla Readability）抽取正文，优先于 RSS 摘要入库。
-
-### 2.2 去重与存储层 (Dedup & Storage Layer)
-
-* **组件**: `DBService` + `better-sqlite3`
-* **逻辑**:
-  * SQLite WAL 模式持久化。
-  * **URL 去重**: Base64(URL) 作为主键，数据库级唯一约束。
-  * **模糊标题去重** (v2.1 新增):
-    * 标准化标题（去媒体归属、小写、保留 CJK 字符）。
-    * 内存缓存近 24h 标题的 trigram 集合和词集合。
-    * **倒排词索引**快速定位共享词汇的候选标题。
-    * 对候选做 **word Jaccard** + **trigram Dice** 双重检测，任一超阈值即判重。
-    * `saveNews()` 实时更新缓存，同一采集周期的后续条目立即参与去重。
-  * **分页查询** (v2.1 新增): `getUnreportedNews(limit)` 加 `LIMIT`，防积压时内存溢出。
-  * **优先级排序**: 按威胁等级 DESC → 源分级 ASC → 时间 DESC。
-
-### 2.3 分析管线层 (Analysis Pipeline)
-
-* **威胁分类器** (`classifier.ts`):
-  * 从“仅标题分类”升级为“标题 + 正文分类”。
-  * 排除非相关内容 → CRITICAL → HIGH → MEDIUM → LOW → INFO 级联匹配。
-  * 复合升级规则: 军事关键词 + 地缘目标 → 自动升级为 CRITICAL。
-  * 若正文命中更高等级，可覆盖标题结果（置信度略降，避免背景提及误报）。
-  * 正则缓存优化，短词强制词边界匹配。
-
-* **新闻聚类** (`clustering.ts`):
-  * 多语言分词 → Jaccard 相似度 → 并查集分组。
-  * 选最权威源（最低 tier）作为聚类主标题。
-  * 聚合威胁评估（最高等级 + 加权平均置信度）。
-
-* **趋势检测** (`trending.ts`):
-  * 2 小时滚动窗口计数 vs 7 天基线比对。
-  * 实体自动提取（CVE、APT、领导人名字）。
-  * 跨源验证（至少 2 个独立源确认）。
-  * 冷却期避免重复告警。
-  * seenHeadlines Map + LRU 淘汰（上限可配），修复内存泄漏。
-
-### 2.4 多智能体分析与生成层 (Intelligence Layer)
-
-* **组件**: `AIService` + `prompts.ts`
-* **逻辑**:
-  * **多智能体协作流 (v2.2 新增)**:
-    1. **Macro Analyst Agent**: 并行运行，专注于地缘政治逻辑与宏观政策推演。
-    2. **Sentiment Analyst Agent**: 并行运行，从新闻摘要中提取市场情绪底色（Risk-on/off）。
-    3. **Market Strategist (CIO)**: 汇总上述两者的输出 JSON，结合 `yfinance` 实时价格，进行“逻辑 vs 价格”交叉验证，生成最终研报。
-  * **Token 预算管理**: 
-    * 总预算可配（默认 8000 token）。
-    * 按信息类型分配: 新闻 50%、聚类 15%、趋势 10%、Agent 见解 25%。
-  * **AI 回退链**: Primary → Fallback 自动切换。
-
-### 2.5 市场数据与预测评分层 (Market & Scoring Layer)
-
-* **组件**: `yfinance` (Python) + `PredictionScorer`
-* **逻辑**:
-  * **实时行情**: 通过 Python 脚本调用 `yfinance` 获取黄金(GC=F)、原油(CL=F)、标普500(^GSPC)等资产的价格与涨跌幅。
-  * **预测持久化**: `AIService` 生成研报后，自动解析其对资产的看涨/看跌研判，连同基准价格存入 SQLite `predictions` 表。
-  * **自动评分任务**:
-    * 由 `PredictionScorer` 处理。
-    * 定期对比当前价格与历史预测时的基准价格。
-    * 依据方向匹配度与偏差幅度计算评分（0-100）。
-
-### 2.5 分发层 (Notification Layer)
-
-* **组件**: Feishu Webhook + Telegram Bot API
-* **逻辑**:
-  * 飞书/Telegram **并行推送**，各自独立（`Promise.allSettled`），一个失败不影响另一个。
-  * **指数退避重试** (v2.1 新增): 每个通道独立重试，延迟 1s → 2s → 4s（可配）。
-  * 飞书卡片含趋势告警、风险评估等 v2.0+ 新增字段。
+当前主实现位于 `src/`（Python）；`src_ts/` 为历史 TypeScript 版本参考，不是默认运行链路。
 
 ---
 
-## 3. 核心数据流 (Data Flow)
+## 2. 代码架构（Python 主链路）
 
-```
-1. Ingestion (摄入)
-   Source URL/resolveSourceUrl() → rss-parser → CircuitBreaker → DBService.hasNews()
-   → DBService.hasSimilarTitle() [模糊去重] → Extractor.extract() [T1/T2]
-   → classifyThreat(title, content) → saveNews()
+### 2.1 入口与调度
 
-2. Analysis (分析)
-   getUnreportedNews(limit) → clusterNews() → detectSpikes()
+- 入口: `src/main.py`
+- 调度器: `APScheduler.AsyncIOScheduler`
+- 默认任务:
+  - 数据采集: `CRON_COLLECT`（默认 `0 * * * *`）
+  - 报告生成: `CRON_REPORT`（默认 `0 8 * * *`）
+  - 自动评分: 固定 interval 4 小时
+  - 数据清理: `CRON_CLEANUP`（默认 `0 3 * * *`）
 
-3. Synthesis (合成)
-   [新闻+聚类+趋势] → 并行调用 [MacroAnalyst & SentimentAnalyst] 
-   → 获取 [yfinance 行情] → MarketStrategist 整合 → Zod 校验 → DailyReport
+说明: 当前实现仅从 cron 字符串中解析小时/分钟字段，不支持完整 crontab 语法的所有组合。
 
-4. Post-Process (后续处理)
-   DailyReport → savePredictions() → Notifier 推送
-   → Scorer 定期运行 → updatePredictionScore()
+### 2.2 业务编排层
 
-5. Finalization (归档)
-   DBService.markAsReported()
-```
+- 编排器: `src/engine.py` (`DeepCurrentsEngine`)
+- 责任:
+  - 启动时连接 DB、触发首轮采集与评分
+  - 采集 -> 聚类上下文构建 -> AI 生成 -> 推送 -> 标记已报告
+  - 定时清理历史数据
 
----
+### 2.3 采集层
 
-## 4. 深度优化特性 (Deep Optimizations)
+- 模块: `src/services/collector.py`
+- 技术: `aiohttp` + `feedparser` + `asyncio.Semaphore`
+- 关键机制:
+  - 按信源 tier 优先级抓取
+  - URL 去重 + 标题模糊去重双重拦截
+  - T1/T2 信源尝试正文提取（`src/utils/extractor.py`）
+  - 熔断器（`src/services/circuit_breaker.py`）按源级别计数失败并冷却
 
-### 4.1 模糊标题去重
+### 2.4 存储与去重层
 
-* **目标**: 同一事件被不同源以不同措辞报道时自动合并。
-* **方法**: 标准化标题 → 词倒排索引候选查找 → word Jaccard + trigram Dice 双重检测。
-* **性能**: 倒排索引将全量比较降为候选集比较，5000 条缓存下 < 50ms。
-* **CJK 支持**: `Intl.Segmenter` 原生中日韩分词，降级方案使用字符 bigram。
+- 模块: `src/services/db_service.py`
+- 存储: `aiosqlite`（文件 `data/intel.db`）
+- 数据表:
+  - `raw_news`: 原始新闻、分级、威胁字段、已报告标记
+  - `predictions`: 资产预测、基准价格、评分状态
+- 去重:
+  - URL 唯一约束
+  - 标题标准化 + 词集 Jaccard + trigram Dice
+  - 近窗口标题缓存与倒排索引
 
-### 4.2 Token 预算管理
+### 2.5 分析层
 
-* **目标**: 充分利用 LLM 上下文窗口，高优信息优先保障。
-* **方法**: 按信息类型分配配额，逐条填充直到预算耗尽，在行边界截断。
-* **效果**: 避免旧版 `.substring(0, 12000)` 的粗暴截断导致信息断裂或浪费。
+- 威胁分类: `src/services/classifier.py`
+  - 关键词级联（critical/high/medium/low/info）
+  - 地缘升级规则（行为词 + 目标词）
+- 事件聚类: `src/services/clustering.py`
+  - 多语言分词后计算 Jaccard，相似标题并查集合并
+  - 聚类后聚合威胁级别与来源信息
 
-### 4.3 健壮性
+### 2.6 AI 生成层
 
-* **异常隔离**: 每个 RSS 源、AI 调用、通知推送均独立 `try-catch`。
-* **熔断器**: 连续失败源自动冷却，返回缓存数据，避免级联故障。
-* **指数退避**: 通知推送失败自动重试 1s → 2s → 4s。
-* **优雅退出**: SIGTERM/SIGINT 停止所有 cron 任务后安全退出。
+- 模块: `src/services/ai_service.py`
+- 角色流程:
+  - MacroAnalyst（宏观）并行
+  - SentimentAnalyst（情绪）并行
+  - MarketStrategist（总整合）
+- 支持主/备模型回退
+- 上下文预算: `AI_MAX_CONTEXT_TOKENS`（默认 16000）
 
-### 4.4 内存管理
+当前实现状态:
 
-* `seenHeadlines` 从无限增长的 Set 改为 Map + LRU 淘汰（上限可配）。
-* `termFrequency` 定期清理过期时间戳，超限时淘汰最不活跃条目。
-* 标题去重缓存 5 分钟 TTL 自动刷新。
+- 最终 Strategist 调用使用自由文本输出后做 JSON 提取，偶发 JSON 结构不合法会导致 `json.loads` 失败。
+- 市场数据在 AI 阶段仍为占位文本（未直接接入实时 `yfinance` 结果）。
+- 预测自动持久化逻辑已预留注释，但默认未启用。
 
-### 4.5 成本控制
+### 2.7 评分层
 
-* **并行度控制**: `p-limit` 严格限制 RSS 抓取和 AI 调用的并发。
-* **Token 预算**: 精确分配 LLM 上下文空间，避免浪费。
-* **分页查询**: 研报新闻条数有上限，防止积压导致 token 暴涨。
+- 模块: `src/services/scorer.py`
+- 行情读取: `src/utils/market_data.py`（`yfinance`）
+- 评分流程:
+  - 轮询 `predictions` 中 `pending` 记录
+  - 获取当前价格并按方向与涨跌幅打分
+  - 更新 `status=scored`
 
----
+当前为演示窗口: 预测后 10 秒即可评分；生产建议改为 12h/24h 窗口。
 
-## 5. 多语言支持 (I18n)
+### 2.8 推送层
 
-### 5.1 共享分词器 (`utils/tokenizer.ts`)
-
-* 检测文本是否包含 CJK 字符。
-* **CJK 文本**: 使用 `Intl.Segmenter`（Node.js 18+ 内置）做词级分词。
-* **降级方案**: 若 Segmenter 不可用，CJK 走字符 bigram，英文走空格分词。
-* **停用词**: 内置英文 50+ 和中文 40+ 停用词，聚类和趋势检测自动过滤。
-* 被 `clustering.ts`、`trending.ts`、`db.service.ts` 三个模块共享。
-
----
-
-## 6. 配置体系 (Configuration)
-
-### 6.1 集中配置模块 (`config/settings.ts`)
-
-* 所有可调参数从环境变量读取，附合理默认值。
-* `dotenv.config()` 在此处统一调用，其余模块通过 `CONFIG` 对象访问。
-* 类型安全的 `envInt` / `envFloat` / `envStr` 解析函数。
-
-### 6.2 环境变量 (.env)
-
-| 分类 | 参数 | 默认值 | 说明 |
-|------|------|--------|------|
-| AI | `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | — | 主 AI 提供商（必填） |
-| AI | `AI_FALLBACK_*` | — | 回退 AI 提供商（推荐） |
-| 推送 | `FEISHU_WEBHOOK` | — | 飞书 Webhook |
-| 推送 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Telegram Bot |
-| 调度 | `CRON_COLLECT` / `CRON_REPORT` / `CRON_CLEANUP` | 见表 | Cron 表达式 |
-| 采集 | `RSS_TIMEOUT_MS` / `RSS_CONCURRENCY` | 15000 / 10 | RSS 参数 |
-| 熔断 | `CB_MAX_FAILURES` / `CB_COOLDOWN_MS` | 3 / 300000 | 熔断器参数 |
-| AI | `AI_TIMEOUT_MS` / `AI_MAX_CONTEXT_TOKENS` | 90000 / 8000 | AI 参数 |
-| 去重 | `DEDUP_SIMILARITY_THRESHOLD` / `DEDUP_HOURS_BACK` | 0.55 / 24 | 去重参数 |
-| 研报 | `REPORT_MAX_NEWS` / `DATA_RETENTION_DAYS` | 500 / 30 | 数据管理 |
-| 聚类 | `CLUSTER_SIMILARITY_THRESHOLD` | 0.3 | 聚类阈值 |
-| 趋势 | `TRENDING_MAX_TRACKED_TERMS` / `TRENDING_MAX_SEEN_HEADLINES` | 5000 / 50000 | 趋势引擎 |
-| 重试 | `NOTIFY_MAX_RETRIES` / `NOTIFY_BASE_DELAY_MS` | 3 / 1000 | 通知重试 |
+- 模块: `src/services/notifier.py`
+- 通道:
+  - 飞书卡片（`aiohttp`）
+  - Telegram Bot（`httpx`，支持代理）
+- 特性:
+  - 通道并行
+  - 指数退避重试
+  - 单通道失败不阻塞其他通道
 
 ---
 
-## 7. 部署与运维 (Deployment & Ops)
+## 3. 信息源配置
 
-### 7.1 Node.js 直接运行
+- 文件: `src/config/sources.py`
+- 当前配置规模: 73 个 source（含原生 RSS 与 RSSHub 扩展）
+- 关键字段:
+  - `tier`（1-4）
+  - `type`（wire/gov/intel/mainstream/market/other）
+  - `is_rss_hub`（是否走 RSSHub 重写）
+- URL 重写规则:
+  - 若 `is_rss_hub=True` 且设置了 `RSSHUB_BASE_URL`
+  - 将 `https://rsshub.app/...` 替换为自建地址
+
+---
+
+## 4. 配置体系
+
+- 文件: `src/config/settings.py`（Pydantic Settings）
+- 来源: `.env` + 环境变量
+- 核心配置组:
+  - 采集并发/超时
+  - 熔断参数
+  - AI 主备提供商
+  - 去重与聚类阈值
+  - 推送重试与代理
+  - 日志输出
+
+---
+
+## 5. 测试与质量现状
+
+- 测试目录: `tests/`
+- 当前用例数: 21
+- 覆盖模块: 配置、分词、DB、采集、引擎、AI、评分、通知、分类与聚类
+
+注意:
+
+- `src/test_tools.py` 以脚本方式运行，`pytest` 会给出 `PytestCollectionWarning`（不是功能性失败）。
+
+---
+
+## 6. 运行与部署
+
+### 6.1 本地运行
 
 ```bash
-npm install
-cp .env.example .env  # 填写配置
-npm start
+uv pip install -r requirements.txt
+cp .env.example .env
+uv run -m src.main
 ```
 
-### 7.2 Docker 部署
+### 6.2 手动报告命令
 
 ```bash
-docker build -t deep-currents .
-docker run -d --name deep-currents --env-file .env \
-  -v deep-currents-data:/app/data \
-  --restart unless-stopped deep-currents
+uv run -m src.run_report
+uv run -m src.run_report --report-only --no-push
+uv run -m src.run_report --json
 ```
 
-* 两阶段构建：builder 编译 TS → 生产镜像仅含编译产物 + 生产依赖。
-* `/app/data` 挂载为 Volume，持久化 `intel.db`。
-* `--restart unless-stopped` 确保崩溃后自动重启。
+### 6.3 Docker Compose
 
-### 7.3 Docker Compose（DeepCurrents + RSSHub + Redis）
-
-* 提供 `docker-compose.yml` 一键编排三服务：
-  * `deep-currents`: 主引擎容器；
-  * `rsshub`: 非标源转 RSS；
-  * `redis`: RSSHub 缓存层。
-* 引擎容器默认设置 `RSSHUB_BASE_URL=http://rsshub:1200`，与 `resolveSourceUrl()` 配合实现内网访问。
-
-```bash
-docker compose up -d
-```
-
-### 7.4 运维要点
-
-* `data/intel.db` 需定期备份（SQLite WAL 模式可安全热备）。
-* 关注日志中的 `[熔断]` 和 `[ERR]` 标记，及时排查源故障。
-* 调整 `AI_MAX_CONTEXT_TOKENS` 以匹配所用模型的上下文窗口。
-* 若 RSSHub 源出现 403，优先检查 `rsshub`/`redis` 容器健康状态与上游反爬策略。
+- 文件: `docker-compose.yml`
+- 当前配置使用 `network_mode: host`
+- `deep-currents` 默认注入 `RSSHUB_BASE_URL=http://127.0.0.1:1200`
 
 ---
 
-## 8. 路线图 (Roadmap)
+## 7. 已知限制与改进建议
 
-**已完成 (v2.1):**
-
-* [x] 信息源分级 & 熔断容错
-* [x] 威胁分类管线
-* [x] 新闻聚类（碎片→宏观事件）
-* [x] 趋势关键词检测
-* [x] AI 回退链
-* [x] Telegram 推送
-* [x] 模糊标题去重
-* [x] Token 预算管理
-* [x] 通知指数退避重试
-* [x] 配置外部化
-* [x] 优雅退出
-* [x] Docker 部署
-* [x] 多语言分词（CJK）
-
-**规划中:**
-
-* [ ] **语义去重 (Embedding)**: 基于向量相似度的深层去重，处理完全改写的同事件报道。
-* [ ] **多语言自动翻译**: 外文源翻译为中文后存储和分析。
-* [ ] **情绪指数跟踪**: 24 小时新闻情绪分布（乐观/中性/悲观）。
-* [ ] **自定义关注词**: 用户配置关键词（如"半导体"、"美联储"），AI 深度挖掘。
-* [ ] **邮件订阅**: 定时邮件投递研报。
-* [ ] **可观测性**: Prometheus Metrics + 健康检查 API。
-* [ ] **研报存档**: 历史研报存储与质量回溯。
+1. 报告最终 JSON 解析脆弱:
+   - 建议将 Strategist 调用切换为 `response_format={"type":"json_object"}` 或失败后自动重试 JSON 修复链路。
+2. 预测闭环未打通:
+   - 建议在 `AIService.generate_daily_report` 后解析 `investmentTrends` 并写入 `predictions`。
+3. 调度 cron 解析过于简化:
+   - 建议直接把完整 cron 交给 APScheduler 的 `CronTrigger.from_crontab`。
+4. 采集器对部分异常缺乏结构化原因分类:
+   - 建议区分 HTTP 状态、TLS、超时、解析错误并统计输出。
 
 ---
-*DeepCurrents Intelligence Team*
+
+*Last aligned with codebase on 2026-03-12.*

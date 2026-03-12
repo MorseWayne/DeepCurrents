@@ -1,11 +1,12 @@
 import pytest
+import pytest_asyncio
 import asyncio
 import os
 from unittest.mock import MagicMock, AsyncMock, patch
 from src.services.scorer import PredictionScorer
 from src.services.db_service import DBService
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_service():
     db_path = "data/test_scorer.db"
     if os.path.exists(db_path): os.remove(db_path)
