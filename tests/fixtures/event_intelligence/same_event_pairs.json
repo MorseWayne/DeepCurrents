@@ -1,0 +1,36 @@
+[
+  {
+    "pair_id": "evt-001",
+    "expected_relation": "same_event",
+    "rationale": "不同媒体用不同措辞描述同一红海航运升级事件。",
+    "left": {
+      "source": "Reuters",
+      "language": "en",
+      "title": "Missile strike disrupts Red Sea shipping",
+      "published_at": "2026-03-13T01:00:00Z"
+    },
+    "right": {
+      "source": "Al Jazeera",
+      "language": "en",
+      "title": "Attack near Bab al-Mandab raises shipping risks",
+      "published_at": "2026-03-13T01:35:00Z"
+    }
+  },
+  {
+    "pair_id": "evt-002",
+    "expected_relation": "same_event",
+    "rationale": "中英文报道都在描述同一央行意外降息。",
+    "left": {
+      "source": "Bloomberg",
+      "language": "en",
+      "title": "Turkey unexpectedly cuts benchmark rate",
+      "published_at": "2026-03-13T06:05:00Z"
+    },
+    "right": {
+      "source": "财联社",
+      "language": "zh",
+      "title": "土耳其央行意外下调基准利率",
+      "published_at": "2026-03-13T06:08:00Z"
+    }
+  }
+]

@@ -1,0 +1,28 @@
+{
+  "query_id": "top-2026-03-13-am",
+  "report_date": "2026-03-13",
+  "description": "用于评估宏观晨报在高波动窗口下的事件排序质量。",
+  "candidates": [
+    {
+      "event_id": "evt_red_sea_001",
+      "title": "Red Sea shipping disruption intensifies",
+      "expected_rank": 1,
+      "expected_relevant": true,
+      "expected_theme": "geopolitics"
+    },
+    {
+      "event_id": "evt_turkey_cb_001",
+      "title": "Turkey central bank surprises with rate cut",
+      "expected_rank": 2,
+      "expected_relevant": true,
+      "expected_theme": "central_banks"
+    },
+    {
+      "event_id": "evt_oil_inventory_001",
+      "title": "US crude inventories rise modestly",
+      "expected_rank": 7,
+      "expected_relevant": false,
+      "expected_theme": "energy"
+    }
+  ]
+}

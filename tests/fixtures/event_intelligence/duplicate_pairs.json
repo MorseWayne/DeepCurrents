@@ -1,0 +1,40 @@
+[
+  {
+    "pair_id": "dup-001",
+    "expected_relation": "duplicate",
+    "rationale": "同一条 Reuters 快讯被不同聚合站转载，URL 规范化后应收敛。",
+    "left": {
+      "source": "Reuters",
+      "language": "en",
+      "canonical_url": "https://www.reuters.com/world/example-attack",
+      "title": "Missile strike disrupts Red Sea shipping",
+      "published_at": "2026-03-13T01:00:00Z"
+    },
+    "right": {
+      "source": "Yahoo Finance",
+      "language": "en",
+      "canonical_url": "https://www.reuters.com/world/example-attack?utm_source=rss",
+      "title": "Missile strike disrupts Red Sea shipping - Reuters",
+      "published_at": "2026-03-13T01:02:00Z"
+    }
+  },
+  {
+    "pair_id": "dup-002",
+    "expected_relation": "duplicate",
+    "rationale": "标题与正文高度一致，仅来源展示名称不同。",
+    "left": {
+      "source": "AP",
+      "language": "en",
+      "canonical_url": "https://apnews.com/article/power-grid-outage",
+      "title": "Power grid outage hits major Ukrainian city",
+      "published_at": "2026-03-13T03:20:00Z"
+    },
+    "right": {
+      "source": "Google News",
+      "language": "en",
+      "canonical_url": "https://apnews.com/article/power-grid-outage?taid=123",
+      "title": "Power grid outage hits major Ukrainian city",
+      "published_at": "2026-03-13T03:22:00Z"
+    }
+  }
+]
