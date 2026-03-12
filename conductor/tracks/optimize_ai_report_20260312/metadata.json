@@ -1,0 +1,8 @@
+{
+  "track_id": "optimize_ai_report_20260312",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-03-12T10:00:00Z",
+  "updated_at": "2026-03-12T10:00:00Z",
+  "description": "优化宏观研报生成的 AI 提示词与上下文注入逻辑"
+}
