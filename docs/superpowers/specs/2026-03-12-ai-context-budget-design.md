@@ -48,6 +48,12 @@ Add runtime resolver:
 3. If model is absent in mapping, use `16000`.
 4. Cache successful lookups with short TTL to reduce metadata traffic.
 
+Metadata retrieval contract in this phase:
+
+1. Prefer OpenAI-compatible metadata endpoint (`GET /v1/models/{model}` or provider-equivalent).
+2. If metadata does not expose explicit window fields, treat as metadata miss and fallback to mapping.
+3. Use resilient field parsing for common aliases (`context_window`, `max_context_tokens`, `input_tokens`).
+
 ### 4.2 Input Budget Calculator
 
 Given `context_window`:
@@ -57,6 +63,16 @@ Given `context_window`:
 3. Ensure lower bound (never below minimal working floor).
 
 Constants are code-level defaults in this iteration.
+
+Initial built-in constants for implementation:
+
+1. `OUTPUT_RESERVE_RATIO = 0.08`
+2. `OUTPUT_RESERVE_MIN = 2048`
+3. `OUTPUT_RESERVE_MAX = 16384`
+4. `SAFETY_MARGIN = 4000`
+5. `PROMPT_OVERHEAD = 2000`
+6. `MIN_WORKING_INPUT = 2000`
+7. `WINDOW_CACHE_TTL_SEC = 900`
 
 ### 4.3 Dynamic Segment Allocation
 
@@ -87,9 +103,18 @@ If over budget, trim in priority order:
 
 Always enforce a final hard cap before sending request.
 
+### 4.5 Provider Fallback Compatibility
+
+Provider fallback may route the same request to a smaller-window model. To avoid oversize prompts after fallback:
+
+1. Resolve context windows for all enabled providers/models used by the current call path.
+2. Use the minimum resolved window as the planning baseline for shared context construction.
+3. If some provider windows are unavailable, include conservative fallback values in the minimum calculation.
+4. Log both per-provider resolved windows and final chosen baseline.
+
 ## 5. Data Flow Changes
 
-1. `generate_daily_report()` resolves effective context window per active model/provider.
+1. `generate_daily_report()` resolves effective windows for active primary/fallback providers and chooses a safe baseline window.
 2. It computes `usable_input` and composes `raw_context` under that budget.
 3. Agent calls run as before.
 4. Strategist input is assembled and passed through guard compressor.
@@ -138,4 +163,3 @@ Update/add tests under `tests/`:
    - Mitigation: safety margin + second-pass guard + hard cap.
 3. Quality loss from aggressive trimming.
    - Mitigation: priority-aware trimming with high-priority content protected until last step.
-
