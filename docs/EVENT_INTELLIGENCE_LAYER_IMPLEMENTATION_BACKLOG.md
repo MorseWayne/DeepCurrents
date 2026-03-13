@@ -11,7 +11,7 @@
 ## 0. 开发进度
 
 - 更新时间: 2026-03-13
-- 当前批次: `Batch 3`
+- 当前批次: `Batch 4`
 - 已完成:
   1. `EIL-000`：已落地 `tests/fixtures/event_intelligence/`、`tests/evaluation/fixture_loader.py`、`tests/test_event_intelligence_fixture_loader.py`，固定三类评估样本并提供可重复加载入口。
   2. `EIL-001`：已在 `src/config/settings.py` 增加 Event Intelligence runtime 配置项，在 `src/services/event_intelligence_bootstrap.py` 建立最小 bootstrap 骨架，并接入 `src/engine.py` / `src/run_report.py` 的共享启动路径。
@@ -32,10 +32,11 @@
   17. `EIL-303`：已新增 `src/services/evidence_selector.py`，完成文章级 evidence package 选择器，按高 Tier、独立信源、数字/政策信号和覆盖多样性为事件压缩 supporting / contradicting 证据，并在有冲突叙事时保留反方证据位；同时补齐 `tests/test_evidence_selector.py`，验证去冗余、冲突保留和按排序结果批量生成证据包的契约。
   18. `EIL-601`：已新增 `src/services/metrics.py`，建立 ingestion / ranking / evidence / report 四阶段指标汇总与结构化日志 helper，并在 `collector`、`event_ranker`、`evidence_selector`、`ai_service`、`engine` 接入运行时指标输出；同时补齐 `tests/test_metrics.py` 及相关服务测试，固定压缩率、单源比例、冲突保留率和 report budget 指标契约。
   19. `EIL-401`：已新增 `src/services/event_summarizer.py`，完成规则版 `event_brief` 生成与持久化，把 `event_query_service + evidence_selector + event_ranker` 的结构化输出收敛为稳定事件卡 schema，并写入 `event_briefs`；同时补齐 `tests/test_event_summarizer.py`，验证字段结构、冲突保留和 ranked briefs 顺序契约。
+  20. `EIL-402`：已新增 `src/services/theme_summarizer.py`，基于固定 taxonomy 和 `region:*` 补充桶，将 ranked `event_brief` 聚合为规则版 `theme_brief`，并写入 `theme_briefs`；同时补齐 `tests/test_theme_summarizer.py`，验证主题归类、区域桶生成、结构化输出和无匹配主题时的失败契约。
 - 下一步:
-  1. `EIL-402`：在 `event_brief` 稳定后推进 `theme_brief` 聚合层，减少上层 AI 直接读事件卡的负担。
-  2. `EIL-403`：补齐 `report_context_builder`，把 event/theme brief 压成最终 report 输入层。
-  3. `EIL-404`：定义 market context 配额和上下文预算裁剪策略，让 brief 层能稳定进入多智能体报告栈。
+  1. `EIL-403`：补齐 `report_context_builder`，把 event/theme brief 压成最终 report 输入层。
+  2. `EIL-404`：定义 market context 配额和上下文预算裁剪策略，让 brief 层能稳定进入多智能体报告栈。
+  3. `EIL-501`：开始重写 Macro / Sentiment / Strategist 的 event-centric 报告输入栈。
 
 ---
 
@@ -487,7 +488,7 @@
   1. `.venv/bin/pytest tests/test_event_summarizer.py` 通过（3 passed）。
   2. `.venv/bin/pytest tests/test_event_summarizer.py tests/test_evidence_selector.py tests/test_event_ranker.py tests/test_event_query_service.py tests/test_event_intelligence_repositories.py` 通过（24 passed）。
 
-### [ ] EIL-402: `theme_summarizer` 生成 `theme_brief`
+### [x] EIL-402: `theme_summarizer` 生成 `theme_brief`
 
 - 主要模块: `src/services/theme_summarizer.py`
 - 主要工作:
@@ -501,6 +502,14 @@
 - 验收标准:
   1. 主题卡能代表多个相关事件的共同脉络。
   2. 主题覆盖不依赖文章级拼接。
+- 当前实现说明:
+  1. `src/services/theme_summarizer.py` 已新增 `ThemeSummarizer`，提供 `summarize_theme()` 与 `summarize_ranked_themes()` 两个 service 入口，统一消费 ranked `event_brief` 而不是文章集合。
+  2. 当前实现采用固定 taxonomy：`geopolitics / central_banks / macro_data / energy / cyber / commodities / rates_fx`，并对高频主区域额外生成 `region:<name>` 补充桶，避免把 `EIL-403` 的自由主题或预算逻辑提前做进来。
+  3. `theme_brief` 会聚合 `summary / coreThreads / whyItMatters / eventRefs / topEvents / stateMix / regions / marketChannels / assets / themeScore` 等稳定字段，并通过 `BriefRepository.upsert_theme_brief()` 持久化到 `theme_briefs`。
+  4. 服务会输出 `theme_brief` 阶段结构化日志，保存最近一次 `last_theme_metrics`，用于验证主题覆盖、区域桶比例和多事件聚合比率。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_theme_summarizer.py` 通过（3 passed）。
+  2. `.venv/bin/pytest tests/test_event_summarizer.py tests/test_event_intelligence_repositories.py` 通过（13 passed）。
 
 ### [ ] EIL-403: `report_context_builder` 上下文构建器
 
