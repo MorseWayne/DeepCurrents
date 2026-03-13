@@ -1,9 +1,10 @@
 # Event Intelligence Layer 研发路线图
 
 **版本**: v2.0  
-**状态**: 待实施  
-**依据文档**: `docs/superpowers/specs/2026-03-13-event-intelligence-layer-design.md`  
-**实施 Backlog**: `docs/EVENT_INTELLIGENCE_LAYER_IMPLEMENTATION_BACKLOG.md`  
+**状态**: 已归档（历史路线图）  
+**当前主文档**: `docs/event-intelligence.md`  
+**依据文档**: `docs/archive/specs/event-intelligence-layer.md`  
+**实施 Backlog**: `docs/archive/event-intelligence-backlog.md`  
 **代码基线**: `src/` Python 主链路  
 **基线日期**: 2026-03-13
 
@@ -118,8 +119,8 @@
 
 ### 4.4 影响模块
 
-1. `docs/superpowers/specs/2026-03-13-event-intelligence-layer-design.md`
-2. `docs/EVENT_INTELLIGENCE_LAYER_ROADMAP.md`
+1. `docs/archive/specs/event-intelligence-layer.md`
+2. `docs/archive/event-intelligence-roadmap.md`
 3. `tests/fixtures/` 或等价评估样本目录
 
 ### 4.5 验收标准

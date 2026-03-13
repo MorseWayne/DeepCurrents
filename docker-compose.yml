@@ -16,6 +16,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - deepcurrents-net
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -25,9 +27,16 @@ services:
       - "6333:6333"
     volumes:
       - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - deepcurrents-net
 
   redis:
-    image: redis:7-alpine
+    image: redis:alpine
     container_name: deep-currents-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
@@ -40,6 +49,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - deepcurrents-net
 
   rsshub:
     image: diygod/rsshub:latest
@@ -49,30 +60,37 @@ services:
       - "1200:1200"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    environment:
+    environment: &proxy-config
       NODE_ENV: production
       CACHE_TYPE: redis
       REDIS_URL: redis://redis:6379/
       TWITTER_AUTH_TOKEN: ${TWITTER_AUTH_TOKEN:-}
-      PROXY: ${DOCKER_HTTPS_PROXY:-}
       HTTP_PROXY: ${DOCKER_HTTPS_PROXY:-}
       HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-}
       ALL_PROXY: ${DOCKER_HTTPS_PROXY:-}
-      NO_PROXY: localhost,127.0.0.1,host.docker.internal,redis
-      no_proxy: localhost,127.0.0.1,host.docker.internal,redis
+      NO_PROXY: localhost,127.0.0.1,host.docker.internal,postgres,qdrant,redis,rsshub
+      no_proxy: localhost,127.0.0.1,host.docker.internal,postgres,qdrant,redis,rsshub
       NODE_USE_ENV_PROXY: "1"
     depends_on:
       redis:
         condition: service_healthy
+    networks:
+      - deepcurrents-net
 
   deep-currents:
     build:
       context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        ALL_PROXY: ${ALL_PROXY:-}
+        NO_PROXY: localhost,127.0.0.1,host.docker.internal,postgres,qdrant,redis,rsshub
     container_name: deep-currents
     restart: unless-stopped
     env_file:
       - .env
     environment:
+      <<: *proxy-config
       PYTHONUNBUFFERED: "1"
       PYTHONPATH: /app
       EVENT_INTELLIGENCE_ENABLED: ${EVENT_INTELLIGENCE_ENABLED:-true}
@@ -80,11 +98,6 @@ services:
       EVENT_INTELLIGENCE_QDRANT_URL: http://qdrant:6333
       EVENT_INTELLIGENCE_REDIS_URL: redis://redis:6379/0
       RSSHUB_BASE_URL: http://rsshub:1200
-      HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-}
-      HTTP_PROXY: ${DOCKER_HTTPS_PROXY:-}
-      ALL_PROXY: ${DOCKER_HTTPS_PROXY:-}
-      NO_PROXY: localhost,127.0.0.1,host.docker.internal,postgres,qdrant,redis,rsshub
-      no_proxy: localhost,127.0.0.1,host.docker.internal,postgres,qdrant,redis,rsshub
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -96,9 +109,15 @@ services:
       redis:
         condition: service_healthy
       qdrant:
-        condition: service_started
+        condition: service_healthy
       rsshub:
         condition: service_started
+    networks:
+      - deepcurrents-net
+
+networks:
+  deepcurrents-net:
+    driver: bridge
 
 volumes:
   postgres-data:

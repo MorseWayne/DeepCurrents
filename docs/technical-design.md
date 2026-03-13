@@ -3,6 +3,7 @@
 **版本**: v2.2 (Python)
 **状态**: Event-centric 主链路已落地
 **定位**: AI 驱动的全球情报聚合与宏观策略研报引擎
+**配套文档**: [index.md](./index.md) | [event-intelligence.md](./event-intelligence.md) | [iteration-plan.md](./iteration-plan.md) | [archive/README.md](./archive/README.md)
 
 ---
 

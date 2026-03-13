@@ -1,10 +1,10 @@
 # Event Intelligence Evaluation Runner Design
 
 - 日期: 2026-03-13
-- 状态: 已批准进入实施
+- 状态: 已归档（历史设计稿）
 - 适用范围: `src/services/evaluation_runner.py`、`tests/evaluation/`、`tests/fixtures/event_intelligence/`
-- 关联 backlog: `docs/EVENT_INTELLIGENCE_LAYER_IMPLEMENTATION_BACKLOG.md` 中 `EIL-602`
-- 关联设计: `docs/superpowers/specs/2026-03-13-event-intelligence-layer-design.md`
+- 关联 backlog: `docs/archive/event-intelligence-backlog.md` 中 `EIL-602`
+- 关联设计: `docs/archive/specs/event-intelligence-layer.md`
 
 ## 0. 背景
 

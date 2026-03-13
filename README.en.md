@@ -10,6 +10,16 @@ DeepCurrents is an automated intelligence system that aggregates **70+ global so
 
 ---
 
+## Documentation
+
+- [docs/index.md](./docs/index.md): current documentation entry point and reading order
+- [docs/technical-design.md](./docs/technical-design.md): current architecture and runtime model
+- [docs/event-intelligence.md](./docs/event-intelligence.md): Event Intelligence current state and known boundaries
+- [docs/iteration-plan.md](./docs/iteration-plan.md): next iteration optimization plan
+- [docs/archive/README.md](./docs/archive/README.md): archived specs, roadmap, and backlog
+
+---
+
 ## ✨ Highlights
 
 - **Multi-Agent Orchestration**: Parallel reasoning by **Macro Analyst** (geopolitical/macro focus) and **Sentiment Analyst** (market tone), synthesized by a **Market Strategist** (CIO-level synthesis).

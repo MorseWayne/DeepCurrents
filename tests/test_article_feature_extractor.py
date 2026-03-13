@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import uuid
 
 import pytest
 
@@ -65,10 +66,16 @@ async def test_article_feature_extractor_extracts_keywords_entities_and_vector_p
     )
 
     extracted = await extractor.extract(article)
+    expected_vector_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "deepcurrents:article-feature:art_1",
+        )
+    )
 
     assert extracted["article_id"] == "art_1"
     assert extracted["embedding_model"] == "bge-m3"
-    assert extracted["embedding_vector_id"] == "art_1"
+    assert extracted["embedding_vector_id"] == expected_vector_id
     assert extracted["language"] == "en"
     assert extracted["simhash"] == "abcd1234"
     assert extracted["quality_score"] == 0.82
@@ -107,14 +114,20 @@ async def test_article_feature_extractor_recomputes_quality_and_persists_outputs
     )
 
     stored = await extractor.extract_and_persist(article)
+    expected_vector_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "deepcurrents:article-feature:art_zh",
+        )
+    )
 
     assert stored["article_id"] == "art_zh"
-    assert stored["embedding_vector_id"] == "art_zh"
+    assert stored["embedding_vector_id"] == expected_vector_id
     assert stored["quality_score"] > 0
     assert vector_store.ensure_calls == [("article_features", 2, "cosine")]
     collection_name, point_id, vector, payload, wait = vector_store.upsert_calls[0]
     assert collection_name == "article_features"
-    assert point_id == "art_zh"
+    assert point_id == expected_vector_id
     assert vector == [0.5, 0.6]
     assert payload["language"] == "zh"
     assert any(

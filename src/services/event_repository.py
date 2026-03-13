@@ -27,6 +27,9 @@ class EventRepository:
         "source_count",
         "metadata",
     )
+    _EVENT_JSON_FIELDS = ("metadata",)
+    _EVENT_SCORE_JSON_FIELDS = ("payload",)
+    _TRANSITION_JSON_FIELDS = ("metadata",)
 
     def __init__(self, pool: Any):
         self._pool = pool
@@ -68,12 +71,12 @@ class EventRepository:
         )
         if row is None:
             return await self.get_event(event["event_id"]) or {}
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._EVENT_JSON_FIELDS) or {}
 
     async def get_event(self, event_id: str) -> dict[str, Any] | None:
         pool = ensure_pool(self._pool)
         row = await pool.fetchrow("SELECT * FROM events WHERE event_id = $1", event_id)
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._EVENT_JSON_FIELDS)
 
     async def update_event(
         self, event_id: str, fields: Mapping[str, Any]
@@ -95,7 +98,7 @@ class EventRepository:
             event_id,
             *values,
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._EVENT_JSON_FIELDS) or {}
 
     async def list_recent_events(
         self,
@@ -128,7 +131,7 @@ class EventRepository:
             query += " WHERE " + " AND ".join(conditions)
         query += f" ORDER BY COALESCE(latest_article_at, updated_at) DESC NULLS LAST, created_at DESC LIMIT ${limit_index}"
         rows = await pool.fetch(query, *values)
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._EVENT_JSON_FIELDS)
 
     async def add_event_member(self, member: Mapping[str, Any]) -> dict[str, Any]:
         pool = ensure_pool(self._pool)
@@ -154,7 +157,7 @@ class EventRepository:
             member.get("is_primary", False),
             member.get("added_at"),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._EVENT_SCORE_JSON_FIELDS) or {}
 
     async def list_event_members(self, event_id: str) -> list[dict[str, Any]]:
         pool = ensure_pool(self._pool)
@@ -220,7 +223,7 @@ class EventRepository:
             event_id,
             profile,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._EVENT_SCORE_JSON_FIELDS)
 
     async def list_event_scores(self, event_id: str) -> list[dict[str, Any]]:
         pool = ensure_pool(self._pool)
@@ -233,7 +236,7 @@ class EventRepository:
             """,
             event_id,
         )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._EVENT_SCORE_JSON_FIELDS)
 
     async def record_state_transition(
         self, transition: Mapping[str, Any]
@@ -267,8 +270,10 @@ class EventRepository:
                 "SELECT * FROM event_state_transitions WHERE transition_id = $1",
                 transition["transition_id"],
             )
-            return normalize_row(row) or {}
-        return normalize_row(row) or {}
+                return (
+                    normalize_row(row, json_field_names=self._TRANSITION_JSON_FIELDS) or {}
+                )
+        return normalize_row(row, json_field_names=self._TRANSITION_JSON_FIELDS) or {}
 
     async def list_event_state_transitions(self, event_id: str) -> list[dict[str, Any]]:
         pool = ensure_pool(self._pool)
@@ -281,4 +286,4 @@ class EventRepository:
             """,
             event_id,
         )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._TRANSITION_JSON_FIELDS)

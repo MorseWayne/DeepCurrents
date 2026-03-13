@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 
 from typing import Any, Dict
 
@@ -40,6 +41,7 @@ class PostgresStore:
         self._pool = await asyncpg.create_pool(
             dsn=self.dsn,
             command_timeout=max(self.timeout_ms / 1000, 1),
+            init=self._configure_connection_codecs,
         )
         logger.info("PostgreSQL store 已连接。")
 
@@ -60,3 +62,12 @@ class PostgresStore:
         if self._owns_pool and hasattr(self._pool, "close"):
             await self._pool.close()
         self._pool = None
+
+    async def _configure_connection_codecs(self, connection: Any) -> None:
+        for typename in ("json", "jsonb"):
+            await connection.set_type_codec(
+                typename,
+                schema="pg_catalog",
+                encoder=json.dumps,
+                decoder=json.loads,
+            )

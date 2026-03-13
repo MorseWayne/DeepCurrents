@@ -3,10 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Mapping
 
-from .repository_support import ensure_pool, normalize_row, normalize_rows
+from .repository_support import (
+    ensure_pool,
+    normalize_row,
+    normalize_rows,
+    serialize_jsonb,
+)
 
 
 class ArticleRepository:
+    _ARTICLE_JSON_FIELDS = ("metadata",)
+    _FEATURE_JSON_FIELDS = ("entities", "keywords")
+    _DEDUP_JSON_FIELDS = ("reason",)
+
     def __init__(self, pool: Any):
         self._pool = pool
 
@@ -57,9 +66,9 @@ class ArticleRepository:
             article.get("simhash", ""),
             content_length,
             article.get("quality_score", 0),
-            article.get("metadata", {}),
+            serialize_jsonb(article.get("metadata", {})),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._ARTICLE_JSON_FIELDS) or {}
 
     async def get_article(self, article_id: str) -> dict[str, Any] | None:
         pool = ensure_pool(self._pool)
@@ -67,7 +76,7 @@ class ArticleRepository:
             "SELECT * FROM articles WHERE article_id = $1",
             article_id,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._ARTICLE_JSON_FIELDS)
 
     async def get_article_by_canonical_url(
         self, canonical_url: str
@@ -77,7 +86,7 @@ class ArticleRepository:
             "SELECT * FROM articles WHERE canonical_url = $1",
             canonical_url,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._ARTICLE_JSON_FIELDS)
 
     async def find_articles_by_exact_hash(
         self, exact_hash: str, *, limit: int = 20
@@ -94,7 +103,7 @@ class ArticleRepository:
             exact_hash,
             limit,
         )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._ARTICLE_JSON_FIELDS)
 
     async def list_recent_articles(
         self, *, since: datetime | None = None, limit: int = 100
@@ -122,7 +131,7 @@ class ArticleRepository:
                 since,
                 limit,
             )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._ARTICLE_JSON_FIELDS)
 
     async def upsert_article_features(
         self, features: Mapping[str, Any]
@@ -159,12 +168,12 @@ class ArticleRepository:
             features.get("embedding_vector_id", ""),
             features.get("language", ""),
             features.get("simhash", ""),
-            features.get("entities", []),
-            features.get("keywords", []),
+            serialize_jsonb(features.get("entities", [])),
+            serialize_jsonb(features.get("keywords", [])),
             features.get("quality_score", 0),
             features.get("feature_version", "v1"),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._FEATURE_JSON_FIELDS) or {}
 
     async def get_article_features(self, article_id: str) -> dict[str, Any] | None:
         pool = ensure_pool(self._pool)
@@ -172,7 +181,7 @@ class ArticleRepository:
             "SELECT * FROM article_features WHERE article_id = $1",
             article_id,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._FEATURE_JSON_FIELDS)
 
     async def create_dedup_link(self, link: Mapping[str, Any]) -> dict[str, Any]:
         pool = ensure_pool(self._pool)
@@ -197,9 +206,9 @@ class ArticleRepository:
             link["right_article_id"],
             link["relation_type"],
             link.get("confidence", 0),
-            link.get("reason", {}),
+            serialize_jsonb(link.get("reason", {})),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._DEDUP_JSON_FIELDS) or {}
 
     async def list_dedup_links(self, article_id: str) -> list[dict[str, Any]]:
         pool = ensure_pool(self._pool)
@@ -212,4 +221,4 @@ class ArticleRepository:
             """,
             article_id,
         )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._DEDUP_JSON_FIELDS)

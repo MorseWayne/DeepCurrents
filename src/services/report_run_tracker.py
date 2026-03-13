@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
 from .report_models import DailyReport
+from .repository_support import deserialize_jsonb
 
 
 class ReportRepositoryLike(Protocol):
@@ -350,7 +351,8 @@ class ReportRunTracker:
         return dict(parsed) if isinstance(parsed, Mapping) else {}
 
     def _mapping(self, value: Any) -> dict[str, Any]:
-        return dict(value) if isinstance(value, Mapping) else {}
+        normalized = deserialize_jsonb(value)
+        return dict(normalized) if isinstance(normalized, Mapping) else {}
 
     def _sequence_of_mappings(self, value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):

@@ -1,11 +1,11 @@
 # Local Deployment Refresh Design
 
 - 日期: 2026-03-13
-- 状态: 已批准进入实施
+- 状态: 已归档（历史设计稿）
 - 适用范围: `.env.example`、`docker-compose.yml`、`README.md`、`README.en.md`
 - 关联背景:
-  - `docs/superpowers/specs/2026-03-13-event-intelligence-layer-design.md`
-  - `docs/superpowers/specs/2026-03-13-event-intelligence-legacy-retirement-design.md`
+  - `docs/archive/specs/event-intelligence-layer.md`
+  - `docs/archive/specs/event-intelligence-legacy-retirement.md`
 
 ## 0. 背景
 

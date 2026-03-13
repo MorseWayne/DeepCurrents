@@ -3,10 +3,17 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Mapping, Sequence
 
-from .repository_support import ensure_pool, normalize_row, normalize_rows
+from .repository_support import (
+    ensure_pool,
+    normalize_row,
+    normalize_rows,
+    serialize_jsonb,
+)
 
 
 class BriefRepository:
+    _JSON_FIELDS = ("brief_json",)
+
     def __init__(self, pool: Any):
         self._pool = pool
 
@@ -34,10 +41,10 @@ class BriefRepository:
             brief["event_id"],
             brief.get("version", "v1"),
             brief.get("summary", ""),
-            brief.get("brief_json", {}),
+            serialize_jsonb(brief.get("brief_json", {})),
             brief.get("model", ""),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._JSON_FIELDS) or {}
 
     async def get_event_brief(
         self, event_id: str, *, version: str = "v1"
@@ -48,7 +55,7 @@ class BriefRepository:
             event_id,
             version,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._JSON_FIELDS)
 
     async def list_event_briefs(
         self, event_ids: Sequence[str], *, version: str = "v1"
@@ -66,7 +73,7 @@ class BriefRepository:
             list(event_ids),
             version,
         )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._JSON_FIELDS)
 
     async def upsert_theme_brief(self, brief: Mapping[str, Any]) -> dict[str, Any]:
         pool = ensure_pool(self._pool)
@@ -89,9 +96,9 @@ class BriefRepository:
             brief["theme_key"],
             brief.get("report_date"),
             brief.get("version", "v1"),
-            brief.get("brief_json", {}),
+            serialize_jsonb(brief.get("brief_json", {})),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._JSON_FIELDS) or {}
 
     async def get_theme_brief(
         self,
@@ -111,7 +118,7 @@ class BriefRepository:
             report_date,
             version,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._JSON_FIELDS)
 
     async def list_theme_briefs(
         self, report_date: date | None, *, version: str = "v1"
@@ -127,4 +134,4 @@ class BriefRepository:
             report_date,
             version,
         )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._JSON_FIELDS)

@@ -1,9 +1,10 @@
 # Event Intelligence Layer 架构设计
 
 - 日期: 2026-03-13
-- 状态: 已批准进入规划与实施
+- 状态: 已归档（历史设计稿）
+- 当前主文档: `docs/event-intelligence.md`、`docs/technical-design.md`
 - 适用范围: `src/` Python 主链路
-- 关联文档: `docs/EVENT_INTELLIGENCE_LAYER_ROADMAP.md`、`docs/EVENT_INTELLIGENCE_LAYER_IMPLEMENTATION_BACKLOG.md`
+- 关联文档: `docs/archive/event-intelligence-roadmap.md`、`docs/archive/event-intelligence-backlog.md`
 
 ## 0. 设计前提
 

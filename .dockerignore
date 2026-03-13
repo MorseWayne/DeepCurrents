@@ -7,3 +7,15 @@ data
 .git
 docs
 README.md
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.venv
+venv
+ENV
+.vscode
+.idea
+.DS_Store

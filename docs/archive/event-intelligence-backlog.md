@@ -1,8 +1,9 @@
 # Event Intelligence Layer 实施 Backlog
 
 **版本**: v1.0  
-**状态**: 可按 Batch 直接执行  
-**来源文档**: `docs/superpowers/specs/2026-03-13-event-intelligence-layer-design.md`、`docs/EVENT_INTELLIGENCE_LAYER_ROADMAP.md`  
+**状态**: 已归档（首轮实施记录）  
+**当前主文档**: `docs/event-intelligence.md`  
+**来源文档**: `docs/archive/specs/event-intelligence-layer.md`、`docs/archive/event-intelligence-roadmap.md`  
 **适用范围**: `src/` Python 主链路  
 **建议执行单位**: 1 ticket = 1 个可独立合并的 PR
 
@@ -41,7 +42,7 @@
   26. `EIL-504`：已在 `src/engine.py` 完成 event-centric report stack runtime wiring，并将 `generate_and_send_report()` 切换到 `report_orchestrator` 主路径；同时基于最近一次 `completed report_run` 计算增量 `since` 窗口，使 `run_report.py` 与 `main.py` 继续通过统一的 `engine.generate_and_send_report()` 入口复用新链路，而不再触发旧文章级 `AIService.generate_daily_report()`；另外在 `src/services/report_orchestrator.py` 增加空上下文短路逻辑，并通过 `tests/test_engine.py`、`tests/test_report_orchestrator.py`、`tests/test_run_report.py` 固化“无增量事件直接跳过”的行为。
   27. `EIL-602`：已新增 `src/services/evaluation_runner.py`，将 duplicate、same-event、top-event relevance 三类自动评估和 `final_report_review` 占位 suite 收敛为统一离线 runner，并输出稳定的 suite/result summary schema；同时补齐 `tests/test_evaluation_runner.py`，新增 `tests/fixtures/event_intelligence/evaluation_result_sample.json` 作为结果样例，并通过 fixture loader / tokenizer 回归测试固定默认 heuristics 与可注入 evaluator 行为。
   28. `EIL-603`：已新增 `src/services/feedback_repository.py` 与 `src/services/feedback_service.py`，为 `evaluation_labels` 建立 report-centric feedback first 的写入与查询路径，支持 `report_review` / `report_event_review` 两类人工反馈、基于 `report_run_id` 的 trace 自动补全，以及按 `issue_type` 聚合调优动作建议；同时补齐 `tests/test_feedback_service.py` 和 repository 契约测试，固定 trace 内外目标、过滤查询与调优建议映射行为。
-  29. `EIL-604`：已删除 `src/services/db_service.py`、`src/services/classifier.py`、`src/services/clustering.py` 与对应旧测试，新增 `src/services/prediction_repository.py`、`src/services/threat_labels.py`、`src/utils/text_similarity.py` 承接仍需保留的预测存储、展示常量和相似度工具；同时将 `collector` 改为 event-intelligence-only ingestion 并在 wiring 缺失时 fail-closed、将 `engine`/`main` 移除旧 SQLite 清理依赖、把 `ai_service.py` 收缩为 event-centric 报告复用的 AI 能力库，并同步更新 `README.md`、`README.en.md`、`docs/TECHNICAL_DESIGN.md` 完成文档清理。
+  29. `EIL-604`：已删除 `src/services/db_service.py`、`src/services/classifier.py`、`src/services/clustering.py` 与对应旧测试，新增 `src/services/prediction_repository.py`、`src/services/threat_labels.py`、`src/utils/text_similarity.py` 承接仍需保留的预测存储、展示常量和相似度工具；同时将 `collector` 改为 event-intelligence-only ingestion 并在 wiring 缺失时 fail-closed、将 `engine`/`main` 移除旧 SQLite 清理依赖、把 `ai_service.py` 收缩为 event-centric 报告复用的 AI 能力库，并同步更新 `README.md`、`README.en.md`、`docs/technical-design.md` 完成文档清理。
 - 下一步:
   1. 第一轮核心 Event Intelligence backlog 已完成，可转入后续优化或新批次规划。
 
@@ -733,7 +734,7 @@
   2. 已新增 `src/services/prediction_repository.py` 承接 `predictions` 的 SQLite 持久化边界，新增 `src/utils/text_similarity.py` 承接 trigram / Jaccard / Dice 工具，新增 `src/services/threat_labels.py` 承接通知展示所需 threat label 常量。
   3. `src/services/collector.py` 已移除 `raw_news` fallback 与 legacy mirror；当 event-intelligence ingestion wiring 缺失时，采集阶段会直接返回结构化 skip 指标，不再回退旧文章级入库。
   4. `src/services/ai_service.py` 已删除旧文章级 `generate_daily_report()` 与 `build_news_context()` 主流程，仅保留 event-centric 报告仍复用的 provider window、budget、market context、agent call、JSON repair 与 prediction persistence 能力。
-  5. `src/main.py` 已移除旧 `cleanup_data` 调度任务；`README.md`、`README.en.md`、`docs/TECHNICAL_DESIGN.md` 已同步更新为 event-centric 架构说明。
+  5. `src/main.py` 已移除旧 `cleanup_data` 调度任务；`README.md`、`README.en.md`、`docs/technical-design.md` 已同步更新为 event-centric 架构说明。
 - 验证记录:
   1. `.venv/bin/pytest tests/test_collector.py tests/test_engine.py tests/test_report_orchestrator.py tests/test_ai_service.py tests/test_prediction_repository.py tests/test_scorer.py tests/test_notifier.py tests/test_text_similarity.py tests/test_run_report.py tests/test_event_intelligence_bootstrap.py tests/test_evaluation_runner.py tests/test_feedback_service.py tests/test_event_intelligence_repositories.py tests/test_report_run_tracker.py` 通过（65 passed）。
 

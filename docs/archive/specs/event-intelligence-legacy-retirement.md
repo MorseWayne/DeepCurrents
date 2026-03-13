@@ -1,12 +1,12 @@
 # Event Intelligence Legacy Retirement Design
 
 - 日期: 2026-03-13
-- 状态: 已批准进入实施
+- 状态: 已归档（历史设计稿）
 - 适用范围: `src/services/collector.py`、`src/engine.py`、`src/services/ai_service.py`、`src/services/notifier.py`、`README*`
-- 关联 backlog: `docs/EVENT_INTELLIGENCE_LAYER_IMPLEMENTATION_BACKLOG.md` 中 `EIL-604`
+- 关联 backlog: `docs/archive/event-intelligence-backlog.md` 中 `EIL-604`
 - 关联设计:
-  - `docs/superpowers/specs/2026-03-13-event-intelligence-layer-design.md`
-  - `docs/superpowers/specs/2026-03-13-event-intelligence-report-entry-rewire-design.md`
+  - `docs/archive/specs/event-intelligence-layer.md`
+  - `docs/archive/specs/event-intelligence-report-entry.md`
 
 ## 0. 背景
 
@@ -180,9 +180,9 @@
 
 至少同步：
 
-1. `docs/TECHNICAL_DESIGN.md`
+1. `docs/technical-design.md`
 
-对于 `TECH_OPTIMIZATION_*` 等历史分析文档，不逐段重写，只在必要处补充“基于旧链路，已过时”的说明即可。
+对于 `optimization-analysis.md`、`optimization-plan-v1.md` 等历史分析文档，不逐段重写，只在必要处补充“基于旧链路，已过时”的说明即可。
 
 ## 7. 错误处理
 

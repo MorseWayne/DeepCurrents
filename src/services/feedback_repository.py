@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .repository_support import ensure_pool, normalize_row, normalize_rows
+from .repository_support import (
+    ensure_pool,
+    normalize_row,
+    normalize_rows,
+    serialize_jsonb,
+)
 
 
 class FeedbackRepository:
+    _JSON_FIELDS = ("label_value",)
+
     def __init__(self, pool: Any):
         self._pool = pool
 
@@ -27,11 +34,11 @@ class FeedbackRepository:
             label["label_id"],
             label["label_type"],
             label["subject_id"],
-            label.get("label_value", {}),
+            serialize_jsonb(label.get("label_value", {})),
             label.get("source", "manual"),
             label.get("notes", ""),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._JSON_FIELDS) or {}
 
     async def list_labels(
         self,
@@ -70,7 +77,7 @@ class FeedbackRepository:
             """,
             *values,
         )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._JSON_FIELDS)
 
 
 __all__ = ["FeedbackRepository"]

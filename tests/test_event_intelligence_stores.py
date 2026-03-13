@@ -17,6 +17,42 @@ class FakePool:
         self.closed = True
 
 
+class FakeCodecConnection:
+    def __init__(self):
+        self.codec_calls = []
+
+    async def set_type_codec(
+        self,
+        typename,
+        *,
+        schema="public",
+        encoder,
+        decoder,
+        format="text",
+    ):
+        self.codec_calls.append(
+            {
+                "typename": typename,
+                "schema": schema,
+                "encoder": encoder,
+                "decoder": decoder,
+                "format": format,
+            }
+        )
+
+
+class FakeAsyncpgModule:
+    def __init__(self):
+        self.pool = FakePool()
+        self.codec_connection = FakeCodecConnection()
+        self.create_pool_calls = []
+
+    async def create_pool(self, **kwargs):
+        self.create_pool_calls.append(kwargs)
+        await kwargs["init"](self.codec_connection)
+        return self.pool
+
+
 class FakeRedisClient:
     def __init__(self):
         self.closed = False
@@ -64,6 +100,7 @@ class FakeQdrantClient:
         self.closed = False
         self.collection_exists_calls = []
         self.create_collection_calls = []
+        self.create_collection_error = None
         self.upsert_calls = []
         self.query_points_calls = []
         self.existing_collections = set()
@@ -77,6 +114,11 @@ class FakeQdrantClient:
 
     async def create_collection(self, *, collection_name, vectors_config):
         self.create_collection_calls.append((collection_name, vectors_config))
+        if self.create_collection_error is not None:
+            self.existing_collections.add(collection_name)
+            error = self.create_collection_error
+            self.create_collection_error = None
+            raise error
         self.existing_collections.add(collection_name)
 
     async def upsert(self, *, collection_name, wait, points):
@@ -139,6 +181,40 @@ async def test_postgres_store_keeps_injected_pool_open():
 
 
 @pytest.mark.asyncio
+async def test_postgres_store_registers_json_codecs_on_created_pool(monkeypatch):
+    fake_asyncpg = FakeAsyncpgModule()
+    monkeypatch.setattr(
+        "src.services.postgres_store.importlib.import_module",
+        lambda name: fake_asyncpg,
+    )
+
+    store = PostgresStore("postgresql://localhost/test")
+    await store.connect()
+
+    assert len(fake_asyncpg.create_pool_calls) == 1
+    create_pool_call = fake_asyncpg.create_pool_calls[0]
+    assert create_pool_call["dsn"] == "postgresql://localhost/test"
+    assert create_pool_call["command_timeout"] == 5
+    assert callable(create_pool_call["init"])
+    assert fake_asyncpg.codec_connection.codec_calls == [
+        {
+            "typename": "json",
+            "schema": "pg_catalog",
+            "encoder": fake_asyncpg.codec_connection.codec_calls[0]["encoder"],
+            "decoder": fake_asyncpg.codec_connection.codec_calls[0]["decoder"],
+            "format": "text",
+        },
+        {
+            "typename": "jsonb",
+            "schema": "pg_catalog",
+            "encoder": fake_asyncpg.codec_connection.codec_calls[1]["encoder"],
+            "decoder": fake_asyncpg.codec_connection.codec_calls[1]["decoder"],
+            "format": "text",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_cache_service_keeps_injected_client_open():
     client = FakeRedisClient()
     store = CacheService("redis://localhost/0", client=client)
@@ -193,6 +269,23 @@ async def test_vector_store_creates_collection_and_upserts_point():
     assert points[0].id == "art_1"
     assert points[0].vector == [0.1, 0.2, 0.3]
     assert points[0].payload == {"article_id": "art_1"}
+
+
+@pytest.mark.asyncio
+async def test_vector_store_ignores_collection_exists_race():
+    client = FakeQdrantClient()
+    client.create_collection_error = RuntimeError(
+        "Wrong input: Collection `article_features` already exists!"
+    )
+    store = VectorStore("http://localhost:6333", client=client)
+    store._models = FakeModels
+
+    await store.connect()
+    await store.ensure_collection("article_features", vector_size=3)
+
+    assert client.collection_exists_calls == ["article_features"]
+    assert len(client.create_collection_calls) == 1
+    assert "article_features" in client.existing_collections
 
 
 @pytest.mark.asyncio

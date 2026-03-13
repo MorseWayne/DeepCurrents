@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+import json
 from typing import Any, Sequence
 from unittest.mock import patch
 
@@ -254,6 +255,47 @@ def test_report_context_builder_selects_events_and_taxonomy_themes_with_budget()
     assert builder.last_context_metrics["events_selected"] == 2
     mock_log_metrics.assert_called_once()
     assert mock_log_metrics.call_args.args[1] == "context"
+
+
+def test_report_context_builder_tolerates_string_backed_brief_json():
+    builder = ReportContextBuilder()
+    event_brief = make_event_brief(
+        event_id="evt_geo",
+        title="Missile strike disrupts export route",
+        state_change="escalated",
+        event_type="conflict",
+        total_score=0.92,
+        confidence=0.86,
+        channels=["energy", "shipping"],
+        regions=["middle east"],
+        assets=["brent"],
+    )
+    theme_brief = make_theme_brief(
+        theme_key="energy",
+        display_name="Energy",
+        theme_score=0.84,
+        event_count=1,
+        summary="Energy theme is driven by shipping and outage risks.",
+        threads=["Shipping disruption is lifting freight and crude costs."],
+        regions=["middle east"],
+        channels=["energy", "shipping"],
+        event_refs=["evt_geo"],
+    )
+    event_brief["brief_json"] = json.dumps(event_brief["brief_json"], ensure_ascii=False)
+    theme_brief["brief_json"] = json.dumps(theme_brief["brief_json"], ensure_ascii=False)
+
+    context = builder.build_context(
+        event_briefs=[event_brief],
+        theme_briefs=[theme_brief],
+        market_context="Brent +1.2%",
+        token_budget=800,
+        profile="macro_daily",
+    )
+
+    assert len(context["selected_event_briefs"]) == 1
+    assert context["selected_event_briefs"][0]["brief_json"]["eventId"] == "evt_geo"
+    assert len(context["selected_theme_briefs"]) == 1
+    assert context["selected_theme_briefs"][0]["brief_json"]["themeKey"] == "energy"
 
 
 def test_report_context_builder_drops_theme_before_event_and_compacts_event():

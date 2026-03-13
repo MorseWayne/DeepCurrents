@@ -81,13 +81,23 @@ class VectorStore:
 
         models = self._require_models()
         distance_value = self._distance_value(distance)
-        await client.create_collection(
-            collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=vector_size,
-                distance=distance_value,
-            ),
-        )
+        try:
+            await client.create_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(
+                    size=vector_size,
+                    distance=distance_value,
+                ),
+            )
+        except Exception as exc:
+            if self._is_collection_exists_error(exc):
+                return
+            try:
+                if await client.collection_exists(collection_name=collection_name):
+                    return
+            except Exception:
+                pass
+            raise
 
     async def upsert_point(
         self,
@@ -217,6 +227,11 @@ class VectorStore:
         if member is None:
             raise ValueError(f"Unsupported Qdrant distance: {distance}")
         return getattr(self._require_models().Distance, member)
+
+    @staticmethod
+    def _is_collection_exists_error(exc: Exception) -> bool:
+        message = str(exc).casefold()
+        return "collection" in message and "already exists" in message
 
     @staticmethod
     def _serialize_scored_point(point: Any) -> dict[str, Any]:

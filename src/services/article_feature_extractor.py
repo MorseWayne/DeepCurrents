@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 import re
+import uuid
 from typing import Any, Mapping, Protocol, Sequence
 
 from ..utils.tokenizer import contains_cjk, tokenize_to_array
@@ -138,7 +139,7 @@ class ArticleFeatureExtractor:
         seed = self._coerce_seed(article)
         embedding_input = self._build_embedding_input(seed)
         embedding = await self.embedding_client.embed(embedding_input)
-        vector_id = seed["article_id"]
+        vector_id = self._build_vector_id(seed.get("article_id"))
         keywords = self._extract_keywords(seed)
         entities = self._extract_entities(seed)
         quality_score = self._resolve_quality_score(seed)
@@ -186,6 +187,18 @@ class ArticleFeatureExtractor:
             "vector_collection": extracted["vector_collection"],
             "vector_payload": extracted["vector_payload"],
         }
+
+    @staticmethod
+    def _build_vector_id(article_id: Any) -> str:
+        article_key = ArticleFeatureExtractor._text(article_id)
+        if not article_key:
+            raise ValueError("article_id is required for vector storage")
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"deepcurrents:article-feature:{article_key}",
+            )
+        )
 
     @staticmethod
     def _embedding_base_url(url: str) -> str:

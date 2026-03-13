@@ -1,7 +1,8 @@
 # DeepCurrents (深流) 技术优化分析与演进建议
 
 **版本**: v1.0  
-**状态**: 分析文档 / 待实施  
+**状态**: 已归档（旧 article-centric 优化分析）  
+**当前主文档**: `docs/iteration-plan.md`  
 **范围**: Python 主链路 `src/`  
 **基线日期**: 2026-03-12
 

@@ -10,6 +10,7 @@ from ..utils.logger import get_logger
 from ..utils.market_data import render_market_context_snapshot
 from .context_quota_policy import ContextQuotaPolicy, get_context_quota_policy
 from .metrics import log_stage_metrics, safe_ratio
+from .repository_support import deserialize_jsonb
 
 logger = get_logger("report-context-builder")
 
@@ -832,7 +833,8 @@ class ReportContextBuilder:
         return channels
 
     def _mapping(self, value: Any) -> dict[str, Any]:
-        return dict(value) if isinstance(value, Mapping) else {}
+        normalized = deserialize_jsonb(value)
+        return dict(normalized) if isinstance(normalized, Mapping) else {}
 
     def _sequence_of_mappings(self, value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):

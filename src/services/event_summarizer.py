@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 from ..utils.logger import get_logger
 from .metrics import log_stage_metrics, mean_float, safe_ratio
+from .repository_support import deserialize_jsonb
 
 logger = get_logger("event-summarizer")
 
@@ -487,7 +488,8 @@ class EventSummarizer:
         return f"brief_{event_id}_{version}"
 
     def _mapping(self, value: Any) -> dict[str, Any]:
-        return dict(value) if isinstance(value, Mapping) else {}
+        normalized = deserialize_jsonb(value)
+        return dict(normalized) if isinstance(normalized, Mapping) else {}
 
     def _sequence_of_mappings(self, value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from typing import Any, Sequence
 from unittest.mock import patch
 
@@ -10,11 +11,14 @@ from src.services.event_summarizer import EventSummarizer
 
 
 class FakeBriefRepository:
-    def __init__(self):
+    def __init__(self, *, stringify_brief_json: bool = False):
         self.upserted: list[dict[str, Any]] = []
+        self.stringify_brief_json = stringify_brief_json
 
     async def upsert_event_brief(self, brief: dict[str, Any]) -> dict[str, Any]:
         payload = dict(brief)
+        if self.stringify_brief_json:
+            payload["brief_json"] = json.dumps(payload["brief_json"], ensure_ascii=False)
         self.upserted.append(payload)
         return payload
 
@@ -385,3 +389,55 @@ async def test_event_summarizer_summarizes_ranked_events_in_order_and_logs_metri
     )
     mock_log_metrics.assert_called_once()
     assert mock_log_metrics.call_args.args[1] == "brief"
+
+
+@pytest.mark.asyncio
+async def test_event_summarizer_metrics_tolerate_string_backed_brief_json():
+    brief_repo = FakeBriefRepository(stringify_brief_json=True)
+    query_service = FakeEventQueryService()
+    evidence_selector = FakeEvidenceSelector()
+    summarizer = EventSummarizer(brief_repo, query_service, evidence_selector)
+
+    query_service.timelines["evt_1"] = make_timeline(
+        event_id="evt_1",
+        status="escalating",
+        event_type="conflict",
+        canonical_title="Drone attack disrupts export terminal",
+        article_count=4,
+        source_count=3,
+        channels=["energy"],
+        regions=["middle east"],
+        assets=["brent"],
+        transitions=[{"to_state": "escalating", "reason": "impact_scope_expanded"}],
+    )
+    evidence_selector.ranked_packages = [
+        {
+            "event_id": "evt_1",
+            "profile": "risk_daily",
+            "event_score": make_score(
+                profile="risk_daily",
+                total_score=0.88,
+                novelty_score=0.77,
+                corroboration_score=0.8,
+                source_quality_score=0.84,
+                uncertainty_score=0.14,
+                top_drivers=["threat_score", "market_impact_score"],
+            ),
+            "supporting_evidence": [
+                {
+                    "article_id": "art_1",
+                    "source_id": "reuters",
+                    "title": "Drone attack disrupts export terminal",
+                }
+            ],
+            "contradicting_evidence": [],
+        }
+    ]
+
+    briefs = await summarizer.summarize_ranked_events(profile="risk_daily", limit=1)
+
+    assert isinstance(briefs[0]["brief_json"], str)
+    assert summarizer.last_brief_metrics["briefs_generated"] == 1
+    assert summarizer.last_brief_metrics["avg_confidence"] > 0.0
+    assert summarizer.last_brief_metrics["avg_total_score"] == pytest.approx(0.88)
+    assert summarizer.last_brief_metrics["avg_evidence_ref_count"] == pytest.approx(1.0)

@@ -1,8 +1,9 @@
 # DeepCurrents 技术优化实施计划
 
 **版本**: v1.0  
-**状态**: 待执行  
-**依据文档**: `docs/TECH_OPTIMIZATION_ANALYSIS.md`  
+**状态**: 已归档（旧 article-centric 优化计划）  
+**当前主文档**: `docs/iteration-plan.md`  
+**依据文档**: `docs/archive/optimization-analysis.md`  
 **代码基线**: `src/` Python 主链路  
 **基线日期**: 2026-03-12  
 **本地验证基线**: `uv run pytest -q` -> `29 passed`

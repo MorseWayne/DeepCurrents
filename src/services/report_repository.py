@@ -8,6 +8,8 @@ from .repository_support import (
     ensure_pool,
     normalize_row,
     normalize_rows,
+    serialize_jsonb,
+    serialize_jsonb_fields,
 )
 
 
@@ -21,6 +23,7 @@ class ReportRepository:
         "selected_event_count",
         "metadata",
     )
+    _JSON_FIELDS = ("metadata",)
 
     def __init__(self, pool: Any):
         self._pool = pool
@@ -49,9 +52,9 @@ class ReportRepository:
             report_run.get("budget_tokens", 0),
             report_run.get("input_event_count", 0),
             report_run.get("selected_event_count", 0),
-            report_run.get("metadata", {}),
+            serialize_jsonb(report_run.get("metadata", {})),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._JSON_FIELDS) or {}
 
     async def get_report_run(self, report_run_id: str) -> dict[str, Any] | None:
         pool = ensure_pool(self._pool)
@@ -59,7 +62,7 @@ class ReportRepository:
             "SELECT * FROM report_runs WHERE report_run_id = $1",
             report_run_id,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._JSON_FIELDS)
 
     async def get_report_run_by_date(
         self, profile: str, report_date: date | None
@@ -74,7 +77,7 @@ class ReportRepository:
             profile,
             report_date,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._JSON_FIELDS)
 
     async def get_latest_report_run(
         self, profile: str, *, status: str = "completed"
@@ -91,7 +94,7 @@ class ReportRepository:
             profile,
             status,
         )
-        return normalize_row(row)
+        return normalize_row(row, json_field_names=self._JSON_FIELDS)
 
     async def list_report_runs(
         self,
@@ -126,14 +129,15 @@ class ReportRepository:
             """,
             *values,
         )
-        return normalize_rows(rows)
+        return normalize_rows(rows, json_field_names=self._JSON_FIELDS)
 
     async def update_report_run(
         self, report_run_id: str, fields: Mapping[str, Any]
     ) -> dict[str, Any]:
         pool = ensure_pool(self._pool)
+        serialized_fields = serialize_jsonb_fields(fields, ("metadata",))
         assignments, values = build_update_fields(
-            fields,
+            serialized_fields,
             self._REPORT_UPDATE_FIELDS,
             start_index=2,
         )
@@ -147,7 +151,7 @@ class ReportRepository:
             report_run_id,
             *values,
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._JSON_FIELDS) or {}
 
     async def replace_report_event_links(
         self, report_run_id: str, links: Sequence[Mapping[str, Any]]
