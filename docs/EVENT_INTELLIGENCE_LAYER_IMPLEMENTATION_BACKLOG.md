@@ -11,7 +11,7 @@
 ## 0. 开发进度
 
 - 更新时间: 2026-03-13
-- 当前批次: `Batch 4`
+- 当前批次: `Batch 5`
 - 已完成:
   1. `EIL-000`：已落地 `tests/fixtures/event_intelligence/`、`tests/evaluation/fixture_loader.py`、`tests/test_event_intelligence_fixture_loader.py`，固定三类评估样本并提供可重复加载入口。
   2. `EIL-001`：已在 `src/config/settings.py` 增加 Event Intelligence runtime 配置项，在 `src/services/event_intelligence_bootstrap.py` 建立最小 bootstrap 骨架，并接入 `src/engine.py` / `src/run_report.py` 的共享启动路径。
@@ -34,10 +34,11 @@
   19. `EIL-401`：已新增 `src/services/event_summarizer.py`，完成规则版 `event_brief` 生成与持久化，把 `event_query_service + evidence_selector + event_ranker` 的结构化输出收敛为稳定事件卡 schema，并写入 `event_briefs`；同时补齐 `tests/test_event_summarizer.py`，验证字段结构、冲突保留和 ranked briefs 顺序契约。
   20. `EIL-402`：已新增 `src/services/theme_summarizer.py`，基于固定 taxonomy 和 `region:*` 补充桶，将 ranked `event_brief` 聚合为规则版 `theme_brief`，并写入 `theme_briefs`；同时补齐 `tests/test_theme_summarizer.py`，验证主题归类、区域桶生成、结构化输出和无匹配主题时的失败契约。
   21. `EIL-403`：已新增 `src/services/report_context_builder.py`，完成 event/theme brief 驱动的 report context 组装、预算裁剪和多样性约束，并输出结构化 `context_package` 与 prompt-ready 文本块；同时补齐 `tests/test_report_context_builder.py`，验证预算紧张时的主题优先裁剪、事件轻量降级、同主题/同区域去挤占和服务层接线契约。
+  22. `EIL-404`：已新增 `src/services/context_quota_policy.py`，将 `macro_daily / risk_daily / strategy_am` 三套上下文预算与多样性上限从 `report_context_builder` 中抽离；同时扩展 `src/utils/market_data.py`，新增结构化 `market_context` snapshot 与渲染 helper，并让 `report_context_builder` 支持 policy 驱动的预算分配、region theme 上限和结构化市场上下文渲染。
 - 下一步:
-  1. `EIL-404`：定义 market context 配额和上下文预算裁剪策略，让 brief 层能稳定进入多智能体报告栈。
-  2. `EIL-501`：开始重写 Macro / Sentiment / Strategist 的 event-centric 报告输入栈。
-  3. `EIL-502`：让 strategist 只消费 event/theme/market context，而不再直读文章列表。
+  1. `EIL-501`：开始重写 Macro / Sentiment / Strategist 的 event-centric 报告输入栈。
+  2. `EIL-502`：让 strategist 只消费 event/theme/market context，而不再直读文章列表。
+  3. `EIL-503`：补齐 report run 与 event/theme 引用写回，建立报告可追溯关系。
 
 ---
 
@@ -535,7 +536,7 @@
   1. `.venv/bin/pytest tests/test_report_context_builder.py` 通过（4 passed）。
   2. `.venv/bin/pytest tests/test_report_context_builder.py tests/test_event_summarizer.py tests/test_theme_summarizer.py tests/test_event_intelligence_repositories.py` 通过（20 passed）。
 
-### [ ] EIL-404: 市场上下文适配与预算配额策略
+### [x] EIL-404: 市场上下文适配与预算配额策略
 
 - 主要模块: `src/utils/market_data.py`、`src/services/context_quota_policy.py`
 - 主要工作:
@@ -549,6 +550,14 @@
 - 验收标准:
   1. 市场数据注入方式稳定且可测试。
   2. 不同报告 profile 可切换不同配额策略。
+- 当前实现说明:
+  1. `src/services/context_quota_policy.py` 已新增 `ContextQuotaPolicy` 与 `get_context_quota_policy()`，将 `macro_daily / risk_daily / strategy_am` 三套 event/theme/market 预算占比、事件位上限和 region theme 上限收敛为独立 policy。
+  2. `src/utils/market_data.py` 已扩展 `build_market_context_snapshot()` 与 `render_market_context_snapshot()`，把价格快照标准化为 `as_of / prices / winners / losers / cross_asset_signals / summary` 的稳定结构，同时保留原有 `get_market_price()` / `search_market_symbol()` 抓数能力不变。
+  3. `src/services/report_context_builder.py` 已改为按 profile 读取 quota policy，`budget_summary` 中会暴露 `policy_name` 与 `quota` 明细；同时 builder 支持直接消费结构化 market snapshot，并用 `max_region_themes` 与 `prefer_taxonomy_themes` 稳定约束主题卡选择顺序。
+  4. 现有 builder 仍兼容自由文本 `market_context` 输入，因此这一步没有强制改 `AIService.build_market_price_context()` 的返回签名。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_context_quota_policy.py tests/test_market_data_context.py tests/test_report_context_builder.py` 通过（10 passed）。
+  2. `.venv/bin/pytest tests/test_ai_service.py tests/test_scorer.py tests/test_theme_summarizer.py tests/test_event_summarizer.py tests/test_report_context_builder.py` 通过（21 passed）。
 
 ---
 

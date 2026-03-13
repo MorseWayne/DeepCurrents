@@ -7,15 +7,12 @@ import json
 from typing import Any, Protocol
 
 from ..utils.logger import get_logger
+from ..utils.market_data import render_market_context_snapshot
+from .context_quota_policy import ContextQuotaPolicy, get_context_quota_policy
 from .metrics import log_stage_metrics, safe_ratio
 
 logger = get_logger("report-context-builder")
 
-DEFAULT_EVENT_BUDGET_SHARE = 0.65
-DEFAULT_THEME_BUDGET_SHARE = 0.20
-DEFAULT_MARKET_BUDGET_SHARE = 0.15
-MAX_EVENTS_PER_THEME = 2
-MAX_EVENTS_PER_REGION = 2
 STATE_PRIORITIES = {
     "new": 4,
     "escalated": 3,
@@ -67,16 +64,9 @@ class ReportContextBuilder:
         self,
         event_summarizer: EventSummarizerLike | None = None,
         theme_summarizer: ThemeSummarizerLike | None = None,
-        *,
-        event_budget_share: float = DEFAULT_EVENT_BUDGET_SHARE,
-        theme_budget_share: float = DEFAULT_THEME_BUDGET_SHARE,
-        market_budget_share: float = DEFAULT_MARKET_BUDGET_SHARE,
     ):
         self.event_summarizer = event_summarizer
         self.theme_summarizer = theme_summarizer
-        self.event_budget_share = max(event_budget_share, 0.0)
-        self.theme_budget_share = max(theme_budget_share, 0.0)
-        self.market_budget_share = max(market_budget_share, 0.0)
         self.last_context_metrics: dict[str, Any] = {}
 
     def build_context(
@@ -89,18 +79,17 @@ class ReportContextBuilder:
         profile: str = "macro_daily",
     ) -> dict[str, Any]:
         normalized_budget = max(int(token_budget), 0)
-        market_text = self._trim_market_context(market_context, normalized_budget)
+        policy = get_context_quota_policy(profile)
+        target_budgets = policy.allocate_budget(normalized_budget)
+
+        market_text = self._trim_market_context(
+            market_context,
+            market_budget=target_budgets["market_budget"],
+        )
         market_tokens = estimate_tokens(market_text)
 
-        remaining_after_market = max(0, normalized_budget - market_tokens)
-        theme_target = min(
-            int(normalized_budget * self.theme_budget_share),
-            remaining_after_market,
-        )
-        event_target = max(0, remaining_after_market - theme_target)
-
         event_candidates = self._prepare_event_candidates(event_briefs)
-        theme_candidates = self._prepare_theme_candidates(theme_briefs)
+        theme_candidates = self._prepare_theme_candidates(theme_briefs, policy=policy)
 
         (
             selected_events,
@@ -109,7 +98,11 @@ class ReportContextBuilder:
             event_theme_counts,
             event_region_counts,
             event_tokens,
-        ) = self._select_event_candidates(event_candidates, budget=event_target)
+        ) = self._select_event_candidates(
+            event_candidates,
+            budget=target_budgets["event_budget"],
+            policy=policy,
+        )
 
         (
             selected_themes,
@@ -117,8 +110,9 @@ class ReportContextBuilder:
             theme_tokens,
         ) = self._select_theme_candidates(
             theme_candidates,
-            budget=theme_target,
+            budget=target_budgets["theme_budget"],
             selected_events=selected_events,
+            policy=policy,
         )
 
         remaining_tokens = max(
@@ -138,6 +132,7 @@ class ReportContextBuilder:
                 region_counts=event_region_counts,
                 extra_budget=remaining_tokens,
                 current_event_tokens=event_tokens,
+                policy=policy,
             )
 
         prompt_sections = self._build_prompt_sections(
@@ -163,6 +158,9 @@ class ReportContextBuilder:
             for item in selected_events
             if self._text(item.get("render_mode")) == "compact"
         ]
+        market_snapshot = (
+            self._mapping(market_context) if self._is_market_context_snapshot(market_context) else {}
+        )
         context_package = {
             "profile": profile,
             "token_budget": normalized_budget,
@@ -171,11 +169,12 @@ class ReportContextBuilder:
             "market_context": {
                 "text": market_text,
                 "tokens": market_tokens,
+                "snapshot": market_snapshot,
             },
             "budget_summary": {
-                "event_budget": event_target,
-                "theme_budget": theme_target,
-                "market_budget": max(0, normalized_budget - event_target - theme_target),
+                "policy_name": policy.name,
+                "quota": policy.to_dict(),
+                **target_budgets,
                 "event_tokens": event_tokens,
                 "theme_tokens": theme_tokens,
                 "market_tokens": market_tokens,
@@ -312,6 +311,8 @@ class ReportContextBuilder:
     def _prepare_theme_candidates(
         self,
         theme_briefs: Sequence[Mapping[str, Any]],
+        *,
+        policy: ContextQuotaPolicy,
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         for row in theme_briefs:
@@ -325,6 +326,9 @@ class ReportContextBuilder:
             bucket_type = self._text(brief_json.get("bucketType")) or (
                 "region" if theme_key.startswith("region:") else "taxonomy"
             )
+            bucket_rank = 0
+            if policy.prefer_taxonomy_themes and bucket_type == "region":
+                bucket_rank = 1
             candidates.append(
                 {
                     "theme_key": theme_key,
@@ -332,6 +336,7 @@ class ReportContextBuilder:
                     "text": text,
                     "tokens": estimate_tokens(text),
                     "bucket_type": bucket_type,
+                    "bucket_rank": bucket_rank,
                     "theme_score": self._safe_float(brief_json.get("themeScore")),
                     "event_count": self._safe_int(brief_json.get("eventCount")),
                 }
@@ -339,7 +344,7 @@ class ReportContextBuilder:
 
         candidates.sort(
             key=lambda item: (
-                1 if self._text(item.get("bucket_type")) == "region" else 0,
+                self._safe_int(item.get("bucket_rank")),
                 -self._safe_float(item.get("theme_score")),
                 -self._safe_int(item.get("event_count")),
                 self._text(item.get("theme_key")),
@@ -352,6 +357,7 @@ class ReportContextBuilder:
         candidates: Sequence[Mapping[str, Any]],
         *,
         budget: int,
+        policy: ContextQuotaPolicy,
     ) -> tuple[
         list[dict[str, Any]],
         list[dict[str, Any]],
@@ -372,10 +378,16 @@ class ReportContextBuilder:
             primary_theme = self._text(candidate.get("primary_theme"))
             primary_region = self._text(candidate.get("primary_region"))
 
-            if primary_theme and theme_counts[primary_theme] >= MAX_EVENTS_PER_THEME:
+            if (
+                primary_theme
+                and theme_counts[primary_theme] >= policy.max_events_per_theme
+            ):
                 dropped_ids.add(event_id)
                 continue
-            if primary_region and region_counts[primary_region] >= MAX_EVENTS_PER_REGION:
+            if (
+                primary_region
+                and region_counts[primary_region] >= policy.max_events_per_region
+            ):
                 dropped_ids.add(event_id)
                 continue
 
@@ -423,12 +435,14 @@ class ReportContextBuilder:
         *,
         budget: int,
         selected_events: Sequence[Mapping[str, Any]],
+        policy: ContextQuotaPolicy,
     ) -> tuple[list[dict[str, Any]], set[str], int]:
         selected: list[dict[str, Any]] = []
         dropped_keys: set[str] = set()
         used = 0
         covered_regions = set(self._collect_regions(selected_events))
         covered_channels = set(self._collect_channels(selected_events))
+        region_theme_count = 0
 
         for candidate in candidates:
             theme_key = self._text(candidate.get("theme_key"))
@@ -444,11 +458,13 @@ class ReportContextBuilder:
                 for channel in self._text_list(brief_json.get("marketChannels"))
             }
 
-            if bucket_type == "region" and not (
-                regions - covered_regions or channels - covered_channels
-            ):
-                dropped_keys.add(theme_key)
-                continue
+            if bucket_type == "region":
+                if region_theme_count >= policy.max_region_themes:
+                    dropped_keys.add(theme_key)
+                    continue
+                if not (regions - covered_regions or channels - covered_channels):
+                    dropped_keys.add(theme_key)
+                    continue
 
             if used + tokens > budget:
                 dropped_keys.add(theme_key)
@@ -465,6 +481,8 @@ class ReportContextBuilder:
             used += tokens
             covered_regions |= regions
             covered_channels |= channels
+            if bucket_type == "region":
+                region_theme_count += 1
 
         return selected, dropped_keys, used
 
@@ -478,6 +496,7 @@ class ReportContextBuilder:
         region_counts: Counter[str],
         extra_budget: int,
         current_event_tokens: int,
+        policy: ContextQuotaPolicy,
     ) -> tuple[list[dict[str, Any]], set[str], int]:
         remaining = max(extra_budget, 0)
         used = current_event_tokens
@@ -503,9 +522,15 @@ class ReportContextBuilder:
             event_id = self._text(candidate.get("event_id"))
             primary_theme = self._text(candidate.get("primary_theme"))
             primary_region = self._text(candidate.get("primary_region"))
-            if primary_theme and theme_counts[primary_theme] >= MAX_EVENTS_PER_THEME:
+            if (
+                primary_theme
+                and theme_counts[primary_theme] >= policy.max_events_per_theme
+            ):
                 continue
-            if primary_region and region_counts[primary_region] >= MAX_EVENTS_PER_REGION:
+            if (
+                primary_region
+                and region_counts[primary_region] >= policy.max_events_per_region
+            ):
                 continue
 
             full_tokens = self._safe_int(candidate.get("full_tokens"))
@@ -632,17 +657,11 @@ class ReportContextBuilder:
             "hard_cap_hit": bool(truncation_summary.get("hard_cap_hit")),
         }
 
-    def _trim_market_context(self, market_context: Any, token_budget: int) -> str:
+    def _trim_market_context(self, market_context: Any, *, market_budget: int) -> str:
         text = self._render_market_context(market_context)
-        if not text or token_budget <= 0:
+        if not text or market_budget <= 0:
             return ""
-        target_budget = min(
-            max(int(token_budget * self.market_budget_share), 0),
-            token_budget,
-        )
-        if target_budget <= 0:
-            return ""
-        return truncate_to_token_budget(text, target_budget)
+        return truncate_to_token_budget(text, market_budget)
 
     def _render_event_brief(self, brief_json: Mapping[str, Any], *, mode: str) -> str:
         title = self._text(brief_json.get("canonicalTitle"))
@@ -697,6 +716,8 @@ class ReportContextBuilder:
     def _render_market_context(self, market_context: Any) -> str:
         if market_context is None:
             return ""
+        if self._is_market_context_snapshot(market_context):
+            return render_market_context_snapshot(self._mapping(market_context))
         if isinstance(market_context, str):
             return market_context.strip()
         if isinstance(market_context, Mapping):
@@ -714,7 +735,9 @@ class ReportContextBuilder:
             market_context,
             (str, bytes),
         ):
-            return "\n".join(f"- {self._text(item)}" for item in market_context if self._text(item))
+            return "\n".join(
+                f"- {self._text(item)}" for item in market_context if self._text(item)
+            )
         return self._text(market_context)
 
     def _primary_event_theme(self, brief_json: Mapping[str, Any]) -> str:
@@ -755,6 +778,11 @@ class ReportContextBuilder:
             if theme_key in theme_hits:
                 return theme_key
         return ""
+
+    def _is_market_context_snapshot(self, market_context: Any) -> bool:
+        if not isinstance(market_context, Mapping):
+            return False
+        return "prices" in market_context and "summary" in market_context
 
     def _brief_json(self, row: Mapping[str, Any]) -> dict[str, Any]:
         data = self._mapping(row)

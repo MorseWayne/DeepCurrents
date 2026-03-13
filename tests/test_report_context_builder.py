@@ -10,6 +10,7 @@ from src.services.report_context_builder import (
     ReportContextBuilder,
     estimate_tokens,
 )
+from src.utils.market_data import build_market_context_snapshot
 
 
 class FakeEventSummarizer:
@@ -221,7 +222,14 @@ def test_report_context_builder_selects_events_and_taxonomy_themes_with_budget()
         context = builder.build_context(
             event_briefs=event_briefs,
             theme_briefs=theme_briefs,
-            market_context={"brent": "72.4", "dxy": "104.2"},
+            market_context=build_market_context_snapshot(
+                [
+                    {"symbol": "CL=F", "price": 72.4, "changePercent": 1.4},
+                    {"symbol": "DX-Y.NYB", "price": 104.2, "changePercent": 0.6},
+                    {"symbol": "^GSPC", "price": 5080.0, "changePercent": -0.9},
+                ],
+                as_of="2026-03-13T08:00:00+00:00",
+            ),
             token_budget=1600,
             profile="risk_daily",
         )
@@ -239,7 +247,10 @@ def test_report_context_builder_selects_events_and_taxonomy_themes_with_budget()
     assert context["coverage_summary"]["theme_keys"] == ["energy", "central_banks"]
     assert "Missile strike disrupts export route" in context["prompt_sections"]["event_briefs_text"]
     assert "[THEME BRIEFS]" in context["prompt_sections"]["theme_briefs_text"]
-    assert "- brent: 72.4" in context["prompt_sections"]["market_context_text"]
+    assert context["budget_summary"]["policy_name"] == "risk_daily"
+    assert context["budget_summary"]["quota"]["max_events_per_theme"] == 3
+    assert "Cross-asset signals:" in context["prompt_sections"]["market_context_text"]
+    assert "Top movers up:" in context["prompt_sections"]["market_context_text"]
     assert builder.last_context_metrics["events_selected"] == 2
     mock_log_metrics.assert_called_once()
     assert mock_log_metrics.call_args.args[1] == "context"
@@ -363,6 +374,87 @@ def test_report_context_builder_enforces_theme_and_region_diversity():
     selected_event_ids = [item["event_id"] for item in context["selected_event_briefs"]]
     assert selected_event_ids == ["evt_1", "evt_2", "evt_rates"]
     assert set(context["truncation_summary"]["dropped_event_ids"]) == {"evt_3", "evt_4"}
+
+
+def test_report_context_builder_applies_profile_budget_and_region_theme_limits():
+    builder = ReportContextBuilder()
+    event_briefs = [
+        make_event_brief(
+            event_id="evt_macro",
+            title="Inflation surprise reprices front-end rates",
+            state_change="new",
+            event_type="macro_data",
+            total_score=0.87,
+            confidence=0.82,
+            channels=["rates", "fx"],
+            regions=["united states"],
+            assets=["usd"],
+        )
+    ]
+    theme_briefs = [
+        make_theme_brief(
+            theme_key="macro_data",
+            display_name="Macro Data",
+            theme_score=0.78,
+            event_count=1,
+            summary="Macro data is driving front-end repricing.",
+            threads=["Inflation and payrolls remain the main catalyst."],
+            regions=["united states"],
+            channels=["rates", "fx"],
+            event_refs=["evt_macro"],
+        ),
+        make_theme_brief(
+            theme_key="region:united_states",
+            display_name="Region: United States",
+            theme_score=0.72,
+            event_count=1,
+            summary="Regional macro bucket remains active.",
+            threads=["US macro surprises continue to drive rates."],
+            regions=["united states"],
+            channels=["rates"],
+            event_refs=["evt_macro"],
+            bucket_type="region",
+        ),
+        make_theme_brief(
+            theme_key="region:global",
+            display_name="Region: Global",
+            theme_score=0.68,
+            event_count=1,
+            summary="Global cross-asset spillover remains in focus.",
+            threads=["Dollar and rates spill over into global assets."],
+            regions=["global"],
+            channels=["fx"],
+            event_refs=["evt_macro"],
+            bucket_type="region",
+        ),
+    ]
+
+    risk_context = builder.build_context(
+        event_briefs=event_briefs,
+        theme_briefs=theme_briefs,
+        market_context="UST2Y +9bp\nDXY firmer",
+        token_budget=1000,
+        profile="risk_daily",
+    )
+    strategy_context = builder.build_context(
+        event_briefs=event_briefs,
+        theme_briefs=theme_briefs,
+        market_context="UST2Y +9bp\nDXY firmer",
+        token_budget=1000,
+        profile="strategy_am",
+    )
+
+    risk_themes = [item["theme_key"] for item in risk_context["selected_theme_briefs"]]
+    strategy_themes = [item["theme_key"] for item in strategy_context["selected_theme_briefs"]]
+
+    assert risk_context["budget_summary"]["event_budget"] == 650
+    assert risk_context["budget_summary"]["market_budget"] == 200
+    assert strategy_context["budget_summary"]["event_budget"] == 450
+    assert strategy_context["budget_summary"]["market_budget"] == 350
+    assert "macro_data" in risk_themes
+    assert "macro_data" in strategy_themes
+    assert sum(1 for item in strategy_themes if item.startswith("region:")) <= 1
+    assert "region:united_states" in strategy_context["truncation_summary"]["dropped_theme_keys"]
 
 
 @pytest.mark.asyncio
