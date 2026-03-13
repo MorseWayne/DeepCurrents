@@ -36,10 +36,11 @@
   21. `EIL-403`：已新增 `src/services/report_context_builder.py`，完成 event/theme brief 驱动的 report context 组装、预算裁剪和多样性约束，并输出结构化 `context_package` 与 prompt-ready 文本块；同时补齐 `tests/test_report_context_builder.py`，验证预算紧张时的主题优先裁剪、事件轻量降级、同主题/同区域去挤占和服务层接线契约。
   22. `EIL-404`：已新增 `src/services/context_quota_policy.py`，将 `macro_daily / risk_daily / strategy_am` 三套上下文预算与多样性上限从 `report_context_builder` 中抽离；同时扩展 `src/utils/market_data.py`，新增结构化 `market_context` snapshot 与渲染 helper，并让 `report_context_builder` 支持 policy 驱动的预算分配、region theme 上限和结构化市场上下文渲染。
   23. `EIL-501`：已新增 `src/services/report_models.py`，将 `DailyReport` 及其相关输出模型从 `ai_service.py` 中抽离，并补充 `MacroAnalystOutput`、`SentimentAnalystOutput` 两个 v2 agent 输出 schema；同时重写 `src/services/prompts.py`，新增 event-centric Prompt v2 和 3 个输入拼装 helper，并保持旧 prompt 常量与 `ai_service` 顶层导出兼容。
+  24. `EIL-502`：已新增 `src/services/report_orchestrator.py`，把 event-centric report flow 从 `ai_service.py` 中拆成独立 orchestrator，统一编排 context builder、Prompt v2、多智能体调用、strategist 输入 guard、JSON 解析、指标回写和预测持久化；同时保留 `AIService.generate_daily_report()` 作为兼容旧文章级入口，并补齐 `tests/test_report_orchestrator.py` 验证新主路径。
 - 下一步:
-  1. `EIL-502`：让 strategist 只消费 event/theme/market context，而不再直读文章列表。
-  2. `EIL-503`：补齐 report run 与 event/theme 引用写回，建立报告可追溯关系。
-  3. `EIL-504`：重接 engine / run_report / 调度入口，彻底切出旧文章级报告路径。
+  1. `EIL-503`：补齐 report run 与 event/theme 引用写回，建立报告可追溯关系。
+  2. `EIL-504`：重接 engine / run_report / 调度入口，彻底切出旧文章级报告路径。
+  3. `EIL-602`：补齐统一回归评估 runner，为报告栈重接后的质量回归准备固定基线。
 
 ---
 
@@ -587,7 +588,7 @@
   1. `.venv/bin/pytest tests/test_report_models.py tests/test_prompts.py tests/test_ai_service.py tests/test_notifier.py` 通过（14 passed）。
   2. `.venv/bin/pytest tests/test_report_models.py tests/test_prompts.py tests/test_ai_service.py tests/test_notifier.py tests/test_report_context_builder.py` 通过（19 passed）。
 
-### [ ] EIL-502: `ai_service` 拆分为 report orchestrator
+### [x] EIL-502: `ai_service` 拆分为 report orchestrator
 
 - 主要模块: `src/services/ai_service.py`、`src/services/report_orchestrator.py`
 - 主要工作:
@@ -602,6 +603,14 @@
 - 验收标准:
   1. 报告生成主路径可独立于旧 `build_news_context()` 运行。
   2. `ai_service.py` 不再承担文章级上下文清洗职责。
+- 当前实现说明:
+  1. 已新增 `src/services/report_orchestrator.py`，提供 `ReportOrchestrator.generate_event_centric_report()`，直接消费 `report_context_builder` 产出的 `context_package`，并以 Prompt v2 驱动 `MacroAnalyst -> SentimentAnalyst -> MarketStrategist` 的 event-centric 报告生成主路径。
+  2. orchestrator 复用 `AIService` 的 provider 适配和底层 utility，包括 shared context window 计算、输入预算估算、市场价格上下文获取、agent 调用、最终 JSON 解析与预测持久化；但把上下文拼装、agent 调度、strategist 输入 guard 和 report 指标回写从 `ai_service.py` 中剥离出来。
+  3. strategist 输入现在只拼接 `event briefs / theme briefs / market context` 与两个 analyst 的 JSON 输出，不再读取原始文章列表；当未显式传入 briefs 时，orchestrator 会走 `report_context_builder.build_context_from_services()` 现算 event-centric context。
+  4. 本票按兼容迁移方式落地，保留 `AIService.generate_daily_report()` 旧入口，尚未删除旧的文章级报告路径；真正重接 `engine / run_report / 调度入口` 留给 `EIL-504`。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_report_orchestrator.py` 通过（3 passed）。
+  2. `.venv/bin/pytest tests/test_report_orchestrator.py tests/test_ai_service.py tests/test_report_context_builder.py tests/test_prompts.py tests/test_report_models.py` 通过（21 passed）。
 
 ### [ ] EIL-503: `report_runs` 与事件追溯落库
 
