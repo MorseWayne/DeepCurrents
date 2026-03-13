@@ -123,6 +123,62 @@ class VectorStore:
             return result.dict()
         return {"result": result}
 
+    async def query_similar_points(
+        self,
+        collection_name: str,
+        *,
+        query_vector: Sequence[float],
+        limit: int = 10,
+        score_threshold: float | None = None,
+        with_payload: bool | Sequence[str] = True,
+    ) -> list[dict[str, Any]]:
+        client = self._require_client()
+        values = [float(item) for item in query_vector]
+        if not values:
+            raise ValueError("query_vector must not be empty")
+
+        points: Any
+        if hasattr(client, "query_points"):
+            response = await client.query_points(
+                collection_name=collection_name,
+                query=values,
+                limit=limit,
+                with_payload=with_payload,
+                with_vectors=False,
+                score_threshold=score_threshold,
+            )
+            points = getattr(response, "points", response)
+        elif hasattr(client, "search"):
+            points = await client.search(
+                collection_name=collection_name,
+                query_vector=values,
+                limit=limit,
+                with_payload=with_payload,
+                score_threshold=score_threshold,
+            )
+        elif hasattr(client, "search_points"):
+            models = self._require_models()
+            request = models.SearchRequest(
+                vector=values,
+                limit=limit,
+                with_payload=with_payload,
+                with_vector=False,
+                score_threshold=score_threshold,
+            )
+            response = await client.search_points(
+                collection_name=collection_name,
+                search_request=request,
+            )
+            points = getattr(response, "result", None) or getattr(
+                response, "points", response
+            )
+        else:
+            raise RuntimeError(
+                "Vector store client does not support similarity queries"
+            )
+
+        return [self._serialize_scored_point(point) for point in points]
+
     async def close(self) -> None:
         if self._client is None:
             return
@@ -161,3 +217,21 @@ class VectorStore:
         if member is None:
             raise ValueError(f"Unsupported Qdrant distance: {distance}")
         return getattr(self._require_models().Distance, member)
+
+    @staticmethod
+    def _serialize_scored_point(point: Any) -> dict[str, Any]:
+        if isinstance(point, Mapping):
+            return dict(point)
+        if hasattr(point, "model_dump"):
+            return point.model_dump()
+        if hasattr(point, "dict"):
+            return point.dict()
+        serialized = {
+            "id": getattr(point, "id", None),
+            "score": getattr(point, "score", None),
+            "payload": getattr(point, "payload", None),
+        }
+        vector = getattr(point, "vector", None)
+        if vector is not None:
+            serialized["vector"] = vector
+        return serialized

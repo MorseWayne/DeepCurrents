@@ -146,10 +146,16 @@ async def test_configure_event_intelligence_ingestion_wires_collector_when_runti
     fake_normalizer_module = ModuleType("src.services.article_normalizer")
     fake_repository_module = ModuleType("src.services.article_repository")
     fake_extractor_module = ModuleType("src.services.article_feature_extractor")
+    fake_deduper_module = ModuleType("src.services.semantic_deduper")
+    fake_event_repository_module = ModuleType("src.services.event_repository")
+    fake_event_builder_module = ModuleType("src.services.event_builder")
 
     normalizer_instance = object()
     repository_instance = object()
     extractor_instance = object()
+    deduper_instance = object()
+    event_repository_instance = object()
+    event_builder_instance = object()
 
     setattr(
         fake_normalizer_module,
@@ -166,6 +172,21 @@ async def test_configure_event_intelligence_ingestion_wires_collector_when_runti
         "ArticleFeatureExtractor",
         MagicMock(return_value=extractor_instance),
     )
+    setattr(
+        fake_deduper_module,
+        "SemanticDeduper",
+        MagicMock(return_value=deduper_instance),
+    )
+    setattr(
+        fake_event_repository_module,
+        "EventRepository",
+        MagicMock(return_value=event_repository_instance),
+    )
+    setattr(
+        fake_event_builder_module,
+        "EventBuilder",
+        MagicMock(return_value=event_builder_instance),
+    )
 
     with patch.dict(
         sys.modules,
@@ -173,6 +194,9 @@ async def test_configure_event_intelligence_ingestion_wires_collector_when_runti
             "src.services.article_normalizer": fake_normalizer_module,
             "src.services.article_repository": fake_repository_module,
             "src.services.article_feature_extractor": fake_extractor_module,
+            "src.services.semantic_deduper": fake_deduper_module,
+            "src.services.event_repository": fake_event_repository_module,
+            "src.services.event_builder": fake_event_builder_module,
         },
     ):
         engine._configure_event_intelligence_ingestion(runtime_state)
@@ -185,8 +209,21 @@ async def test_configure_event_intelligence_ingestion_wires_collector_when_runti
         vector_store,
         embedding_model="bge-m3",
     )
+    fake_deduper_module.SemanticDeduper.assert_called_once_with(
+        repository_instance,
+        vector_store,
+    )
+    fake_event_repository_module.EventRepository.assert_called_once_with(
+        postgres_store.pool
+    )
+    fake_event_builder_module.EventBuilder.assert_called_once_with(
+        event_repository_instance,
+        repository_instance,
+    )
     engine.collector.configure_event_intelligence.assert_called_once_with(
         article_normalizer=normalizer_instance,
         article_repository=repository_instance,
         article_feature_extractor=extractor_instance,
+        semantic_deduper=deduper_instance,
+        event_candidate_extractor=event_builder_instance,
     )

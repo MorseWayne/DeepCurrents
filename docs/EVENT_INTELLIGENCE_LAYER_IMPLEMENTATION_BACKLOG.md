@@ -21,10 +21,11 @@
   6. `EIL-101`：已新增 `src/services/article_models.py`，落地 `ArticleRecord` 标准化文章模型、最小字段校验以及 `from_mapping()` / `from_repository_row()` / `to_article_payload()` / `to_feature_seed()` helper，并通过 `tests/test_article_models.py` 与 repository 契约测试固定序列化行为。
   7. `EIL-102`：已新增 `src/services/article_normalizer.py`，落地 URL canonicalization、标题/正文清洗、时间标准化、语言识别、exact hash / simhash 生成，并通过 `tests/test_article_normalizer.py` 固定 collector 风格输入与中英文样本行为。
   8. `EIL-103`：已新增 `src/services/article_feature_extractor.py`，打通 `ArticleRecord.to_feature_seed()` -> embedding / entities / keywords / quality score 生成 -> `article_features` 写入，并在 `src/services/vector_store.py` 增加 Qdrant collection ensure / point upsert 能力；同时补齐 `tests/test_article_feature_extractor.py` 与 `tests/test_event_intelligence_stores.py` 的契约测试。
+  9. `EIL-104`：已将 `src/services/collector.py` 的采集主路径切换为 `collector -> article_normalizer -> article_repository -> article_feature_extractor`，并在写入成功后通过 legacy mirror 兼容写入旧 `raw_news`；同时补齐 `tests/test_collector.py` 对 article-first 顺序、feature failure 容错和 legacy mirror failure 容错的集成验证。
 - 下一步:
-  1. `EIL-104`：把 `collector -> normalizer -> repository` 主路径切换到新文章链路，并把 feature extractor 接到新入库流程里，停止围绕旧 `db_service.save_news()` 组织新主入口。
-  2. 做一轮带真实 PostgreSQL / Redis / Qdrant 的本地联调，确认 schema bootstrap、store health、repository 读写以及新 article feature / vector write 边界在真实依赖下正常工作。
-  3. 为 feature extraction failure 增补集成级保护验证，确保后续主链路接入时不会破坏 article 主记录写入。
+  1. `EIL-105`：补齐 `semantic_deduper` 的 cheap dedup + semantic dedup 主流程，并把 exact / near / semantic 关系写入 `article_dedup_links`。
+  2. 做一轮带真实 PostgreSQL / Redis / Qdrant 的本地联调，确认 schema bootstrap、store health、repository 读写以及 article feature / vector write 边界在真实依赖下正常工作。
+  3. 继续扩大 `collector` 到 repository / feature extractor 的集成回归范围，覆盖更多真实依赖和重复写入场景。
 
 ---
 
@@ -215,7 +216,7 @@
   1. 新文章入库后可查询到完整特征。
   2. 特征提取失败不会破坏文章主记录写入。
 
-### [ ] EIL-104: `collector -> normalizer -> repository` 主路径重接
+### [x] EIL-104: `collector -> normalizer -> repository` 主路径重接
 
 - 主要模块: `src/services/collector.py`、`src/engine.py`
 - 主要工作:
@@ -229,8 +230,11 @@
 - 验收标准:
   1. 抓取结果能稳定落到 `articles` 与 `article_features`。
   2. 入库主路径不再依赖旧 `raw_news` 表结构。
+- 当前实现说明:
+  1. `src/services/collector.py` 已优先执行标准化文章入库与 feature extraction，仅将旧 `raw_news` 写入保留为兼容 mirror，不再作为新主路径的组织中心。
+  2. `tests/test_collector.py` 已覆盖 article-first 持久化顺序、feature extraction failure 不阻断 article 写入，以及 legacy mirror failure 不阻断采集成功。
 
-### [ ] EIL-105: `semantic_deduper` 与关系写入
+### [x] EIL-105: `semantic_deduper` 与关系写入
 
 - 主要模块: `src/services/semantic_deduper.py`
 - 主要工作:
@@ -245,12 +249,20 @@
 - 验收标准:
   1. duplicate pair 标注集上的识别率达到目标区间。
   2. 语义关系可查询、可回放。
+- 当前实现说明:
+  1. `src/services/semantic_deduper.py` 已提供 cheap dedup（exact + near）与 semantic dedup 两段式流程；near 阶段会跳过已由 exact 阶段命中的候选，避免重复写入 relation。
+  2. `src/services/collector.py` 已按 article-first 顺序接入：`create_article -> link_cheap_duplicates -> extract_and_persist -> link_semantic_duplicates -> legacy mirror`；feature/dedup 异常均为 best-effort，不阻断采集成功。
+  3. `src/services/vector_store.py` 已提供 `query_similar_points()` 并兼容 `query_points`/`search`/`search_points` 客户端路径，semantic dedup 可直接复用。
+  4. `src/services/article_repository.py` 的 `create_dedup_link()` 使用 `ON CONFLICT (left_article_id, right_article_id, relation_type) DO UPDATE`，保证 exact/near/semantic link 幂等更新。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_semantic_deduper.py tests/test_event_intelligence_stores.py tests/test_collector.py tests/test_engine.py` 通过（22 passed）。
+  2. `.venv/bin/pytest tests/test_article_feature_extractor.py tests/test_event_intelligence_repositories.py` 通过（12 passed）。
 
 ---
 
 ## 6. Batch 2 - Event Layer
 
-### [ ] EIL-201: `event_builder` 候选检索与事件新建
+### [x] EIL-201: `event_builder` 候选检索与事件新建
 
 - 主要模块: `src/services/event_builder.py`
 - 主要工作:
@@ -264,6 +276,13 @@
 - 验收标准:
   1. 新文章能够稳定落入某个 `event_id`。
   2. 事件对象具备时间边界和代表标题。
+- 当前实现说明:
+  1. `src/services/event_builder.py` 已新增 `EventBuilder.assign_article_to_event()` 主流程：按时间窗调用 `EventRepository.list_recent_events()` 检索候选，基于标题相似度在“加入已有事件 / 创建新事件”间分流。
+  2. 新事件路径会写入 `events` 与 `event_members`：`create_event()` 落 `canonical_title`、`started_at`、`latest_article_at`、计数字段；首篇成员按 `primary` 写入。
+  3. 已有事件路径会写入 `event_members` 并更新 `events` 时间边界与计数：维护 `started_at` 最小值、`latest_article_at` 最大值、`article_count` 与 `source_count`。
+  4. `tests/test_event_builder.py` 已覆盖两条主分流：无匹配候选时新建事件、有匹配候选时加入既有事件并断言时间边界/代表标题/计数字段。
+- 验证记录:
+  1. `uv run pytest tests/test_event_builder.py tests/test_semantic_deduper.py tests/test_event_intelligence_repositories.py` 通过（15 passed）。
 
 ### [ ] EIL-202: 事件合并判定与状态机迁移
 

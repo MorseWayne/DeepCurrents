@@ -187,6 +187,9 @@ class ArticleRepository:
                 reason
             )
             VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (left_article_id, right_article_id, relation_type) DO UPDATE SET
+                confidence = EXCLUDED.confidence,
+                reason = EXCLUDED.reason
             RETURNING *
             """,
             link["link_id"],

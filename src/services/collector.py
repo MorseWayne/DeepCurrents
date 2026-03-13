@@ -1,7 +1,7 @@
-import asyncio
 import aiohttp
+import asyncio
 import feedparser
-from typing import Any, Dict, Mapping, Optional, Protocol, cast
+from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, cast
 from ..config.settings import CONFIG
 from ..config.sources import SOURCES, Source, resolve_source_url
 from .circuit_breaker import RSSCircuitBreaker
@@ -29,6 +29,28 @@ class ArticleFeatureExtractorLike(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class SemanticDeduperLike(Protocol):
+    async def link_cheap_duplicates(
+        self, article: ArticleRecord | Mapping[str, Any]
+    ) -> list[dict[str, Any]]: ...
+
+    async def link_semantic_duplicates(
+        self,
+        article: ArticleRecord | Mapping[str, Any],
+        *,
+        embedding: Sequence[float] | None,
+    ) -> list[dict[str, Any]]: ...
+
+
+class EventCandidateExtractorLike(Protocol):
+    async def extract_and_persist(
+        self,
+        article: ArticleRecord | Mapping[str, Any],
+        *,
+        extracted_features: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
 class RSSCollector:
     def __init__(self, db: DBService):
         self.db = db
@@ -42,6 +64,8 @@ class RSSCollector:
         self.article_normalizer: ArticleNormalizerLike | None = None
         self.article_repository: ArticleRepositoryLike | None = None
         self.article_feature_extractor: ArticleFeatureExtractorLike | None = None
+        self.semantic_deduper: SemanticDeduperLike | None = None
+        self.event_candidate_extractor: EventCandidateExtractorLike | None = None
 
     def configure_event_intelligence(
         self,
@@ -49,10 +73,21 @@ class RSSCollector:
         article_normalizer: ArticleNormalizerLike | None = None,
         article_repository: ArticleRepositoryLike | None = None,
         article_feature_extractor: ArticleFeatureExtractorLike | None = None,
+        semantic_deduper: SemanticDeduperLike | None = None,
+        event_candidate_extractor: EventCandidateExtractorLike | None = None,
     ) -> None:
         self.article_normalizer = article_normalizer
         self.article_repository = article_repository
         self.article_feature_extractor = article_feature_extractor
+        self.semantic_deduper = semantic_deduper
+        self.event_candidate_extractor = event_candidate_extractor
+
+    def _event_intelligence_enabled(self) -> bool:
+        return (
+            self.article_normalizer is not None
+            and self.article_repository is not None
+            and self.article_feature_extractor is not None
+        )
 
     async def collect_all(self) -> Dict[str, int]:
         """执行全量抓取任务"""
@@ -155,11 +190,6 @@ class RSSCollector:
                     if not link or not title:
                         continue
 
-                    if await self.db.has_news(link):
-                        continue
-                    if await self.db.has_similar_title(title):
-                        continue
-
                     # 提取内容
                     raw_summary = entry.get("summary", "") or entry.get(
                         "description", ""
@@ -180,27 +210,30 @@ class RSSCollector:
                         ) > len(final_content):
                             final_content = extracted_content
 
-                    # 保存新闻
-                    inserted = await self.db.save_news(
-                        link,
-                        title,
-                        final_content,
-                        source.name,
-                        meta={"tier": source.tier, "sourceType": source.type},
+                    raw_published = entry.get("published") or entry.get("updated")
+                    published = (
+                        raw_published if isinstance(raw_published, str) else None
                     )
-                    if inserted:
-                        new_count += 1
-                        raw_published = entry.get("published") or entry.get("updated")
-                        await self._sync_event_intelligence_article(
+
+                    if self._event_intelligence_enabled():
+                        inserted = await self._ingest_event_intelligence_article(
                             link=link,
                             title=title,
                             summary=summary,
                             content=final_content,
                             source=source,
-                            published=raw_published
-                            if isinstance(raw_published, str)
-                            else None,
+                            published=published,
                         )
+                    else:
+                        inserted = await self._save_legacy_news(
+                            link=link,
+                            title=title,
+                            content=final_content,
+                            source=source,
+                        )
+
+                    if inserted:
+                        new_count += 1
 
                 self.breaker.record_success(source.name)
                 if new_count > 0:
@@ -217,7 +250,46 @@ class RSSCollector:
                 if managed_session:
                     await active_session.close()
 
-    async def _sync_event_intelligence_article(
+    async def _save_legacy_news(
+        self,
+        *,
+        link: str,
+        title: str,
+        content: str,
+        source: Source,
+    ) -> bool:
+        if await self.db.has_news(link):
+            return False
+        if await self.db.has_similar_title(title):
+            return False
+        return await self.db.save_news(
+            link,
+            title,
+            content,
+            source.name,
+            meta={"tier": source.tier, "sourceType": source.type},
+        )
+
+    async def _mirror_legacy_news(
+        self,
+        *,
+        link: str,
+        title: str,
+        content: str,
+        source: Source,
+    ) -> bool:
+        try:
+            return await self._save_legacy_news(
+                link=link,
+                title=title,
+                content=content,
+                source=source,
+            )
+        except Exception as exc:
+            logger.error(f"[EIL] Failed to mirror legacy news {link}: {exc}")
+            return False
+
+    async def _ingest_event_intelligence_article(
         self,
         *,
         link: str,
@@ -226,20 +298,24 @@ class RSSCollector:
         content: str,
         source: Source,
         published: str | None,
-    ) -> None:
+    ) -> bool:
         article_normalizer = self.article_normalizer
         article_repository = self.article_repository
         article_feature_extractor = self.article_feature_extractor
-        if (
-            article_normalizer is None
-            or article_repository is None
-            or article_feature_extractor is None
-        ):
-            return
+        semantic_deduper = self.semantic_deduper
+        event_candidate_extractor = self.event_candidate_extractor
+        if not self._event_intelligence_enabled():
+            return await self._save_legacy_news(
+                link=link,
+                title=title,
+                content=content,
+                source=source,
+            )
 
         normalizer = cast(ArticleNormalizerLike, article_normalizer)
         repository = cast(ArticleRepositoryLike, article_repository)
         feature_extractor = cast(ArticleFeatureExtractorLike, article_feature_extractor)
+        deduper = cast(SemanticDeduperLike | None, semantic_deduper)
 
         raw_article = {
             "url": link,
@@ -259,15 +335,75 @@ class RSSCollector:
 
         try:
             article = normalizer.normalize(raw_article)
-            try:
-                await repository.create_article(article.to_article_payload())
-            except Exception as exc:
-                existing = await repository.get_article(article.article_id)
-                if existing is None:
-                    raise
-                logger.warning(
-                    f"[EIL] Article already exists for {link}; refreshing features: {exc}"
-                )
-            await feature_extractor.extract_and_persist(article)
         except Exception as exc:
-            logger.error(f"[EIL] Failed to persist article {link}: {exc}")
+            logger.error(f"[EIL] Failed to normalize article {link}: {exc}")
+            return await self._save_legacy_news(
+                link=link,
+                title=title,
+                content=content,
+                source=source,
+            )
+
+        created = False
+        try:
+            await repository.create_article(article.to_article_payload())
+            created = True
+        except Exception as exc:
+            existing = await repository.get_article(article.article_id)
+            if existing is None:
+                logger.error(f"[EIL] Failed to persist article {link}: {exc}")
+                return await self._mirror_legacy_news(
+                    link=link,
+                    title=title,
+                    content=content,
+                    source=source,
+                )
+            logger.warning(
+                f"[EIL] Article already exists for {link}; refreshing features: {exc}"
+            )
+
+        if deduper is not None:
+            try:
+                await deduper.link_cheap_duplicates(article)
+            except Exception as exc:
+                logger.error(
+                    f"[EIL] Failed to create cheap dedup links for {link}: {exc}"
+                )
+
+        extracted_features: dict[str, Any] | None = None
+        try:
+            extracted_features = await feature_extractor.extract_and_persist(article)
+        except Exception as exc:
+            logger.error(f"[EIL] Failed to extract features for article {link}: {exc}")
+
+        if deduper is not None and extracted_features is not None:
+            try:
+                await deduper.link_semantic_duplicates(
+                    article,
+                    embedding=extracted_features.get("embedding"),
+                )
+            except Exception as exc:
+                logger.error(
+                    f"[EIL] Failed to create semantic dedup links for article {link}: {exc}"
+                )
+
+        event_extractor = cast(
+            EventCandidateExtractorLike | None,
+            event_candidate_extractor,
+        )
+        if event_extractor is not None:
+            try:
+                await event_extractor.extract_and_persist(
+                    article,
+                    extracted_features=extracted_features,
+                )
+            except Exception as exc:
+                logger.error(f"[EIL] Failed to upsert event candidate for {link}: {exc}")
+
+        legacy_inserted = await self._mirror_legacy_news(
+            link=link,
+            title=title,
+            content=content,
+            source=source,
+        )
+        return created or legacy_inserted

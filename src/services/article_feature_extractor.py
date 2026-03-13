@@ -177,9 +177,15 @@ class ArticleFeatureExtractor:
             vector=extracted["embedding"],
             payload=extracted["vector_payload"],
         )
-        return await self.article_repository.upsert_article_features(
+        stored = await self.article_repository.upsert_article_features(
             self._repository_payload(extracted)
         )
+        return {
+            **stored,
+            "embedding": extracted["embedding"],
+            "vector_collection": extracted["vector_collection"],
+            "vector_payload": extracted["vector_payload"],
+        }
 
     @staticmethod
     def _embedding_base_url(url: str) -> str:

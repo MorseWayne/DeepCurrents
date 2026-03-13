@@ -18,6 +18,7 @@ logger = get_logger("engine")
 
 if TYPE_CHECKING:
     from .services.article_feature_extractor import VectorStoreLike
+    from .services.collector import EventCandidateExtractorLike
 
 
 class DeepCurrentsEngine:
@@ -63,6 +64,9 @@ class DeepCurrentsEngine:
             from .services.article_feature_extractor import ArticleFeatureExtractor
             from .services.article_normalizer import ArticleNormalizer
             from .services.article_repository import ArticleRepository
+            from .services.event_builder import EventBuilder
+            from .services.event_repository import EventRepository
+            from .services.semantic_deduper import SemanticDeduper
 
             article_repository = ArticleRepository(postgres_pool)
             article_feature_extractor = ArticleFeatureExtractor(
@@ -70,10 +74,20 @@ class DeepCurrentsEngine:
                 cast("VectorStoreLike", vector_store),
                 embedding_model=config.embedding_model,
             )
+            semantic_deduper = SemanticDeduper(
+                article_repository,
+                cast("VectorStoreLike", vector_store),
+            )
+            event_repository = EventRepository(postgres_pool)
+            event_builder = EventBuilder(event_repository, article_repository)
             self.collector.configure_event_intelligence(
                 article_normalizer=ArticleNormalizer(),
                 article_repository=article_repository,
                 article_feature_extractor=article_feature_extractor,
+                semantic_deduper=semantic_deduper,
+                event_candidate_extractor=cast(
+                    "EventCandidateExtractorLike", event_builder
+                ),
             )
         except Exception as exc:
             self.collector.configure_event_intelligence()
