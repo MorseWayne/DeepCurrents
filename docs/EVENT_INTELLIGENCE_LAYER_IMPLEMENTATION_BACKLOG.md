@@ -29,10 +29,11 @@
   14. `EIL-204`：已新增 `src/services/event_query_service.py`，统一提供事件列表查询、时间线回放和调试视图，并复用 `event_enrichment`、`event_state_transitions`、`article_dedup_links` 与 `event_scores` 生成结构化输出；同时在 `src/services/event_repository.py` 补齐 `list_event_scores()`，并通过 `tests/test_event_query_service.py` 与 repository 回归测试固定查询契约。
   15. `EIL-301`：已新增 `src/services/event_ranker.py`，完成 `threat_score / market_impact_score / novelty_score / corroboration_score / source_quality_score / velocity_score / uncertainty_score` 七维规则版打分、`macro_daily` 总分聚合和 `event_scores` 持久化，并通过 `tests/test_event_ranker.py` 固化高影响事件优先、单源冲突事件降权和分数写入契约。
   16. `EIL-302`：已新增 `src/services/scoring_profiles.py`，将 `macro_daily / risk_daily / strategy_am` 三套 scoring profile 从 `event_ranker` 中抽离，并把 explainability 收敛为 `profile / dimension_scores / weighted_contributions / top_drivers / risk_flags / event_facts` 的稳定结构；同时补齐 `tests/test_event_ranker.py`，验证不同 profile 下排序差异可复现、解释结构完整、未知 profile 明确报错。
+  17. `EIL-303`：已新增 `src/services/evidence_selector.py`，完成文章级 evidence package 选择器，按高 Tier、独立信源、数字/政策信号和覆盖多样性为事件压缩 supporting / contradicting 证据，并在有冲突叙事时保留反方证据位；同时补齐 `tests/test_evidence_selector.py`，验证去冗余、冲突保留和按排序结果批量生成证据包的契约。
 - 下一步:
-  1. `EIL-303`：引入 `evidence_selector`，为高价值事件生成紧凑证据包并显式保留正反证据。
-  2. `EIL-601`：补齐运行指标与结构化日志，让 Batch 3 的排序与证据 ticket 能直接基于可观测指标验收。
-  3. `EIL-401`：开始构建 `event_brief` 生成链路，把排序与证据包转成可复用的摘要单元。
+  1. `EIL-601`：补齐运行指标与结构化日志，让 Batch 3 的排序与证据 ticket 能直接基于可观测指标验收。
+  2. `EIL-401`：开始构建 `event_brief` 生成链路，把排序与证据包转成可复用的摘要单元。
+  3. `EIL-402`：在 `event_brief` 稳定后推进 `theme_brief` 聚合层，减少上层 AI 直接读事件卡的负担。
 
 ---
 
@@ -410,7 +411,7 @@
   1. `.venv/bin/pytest tests/test_event_ranker.py` 通过（5 passed）。
   2. `.venv/bin/pytest tests/test_event_builder.py tests/test_event_state_machine.py tests/test_event_enrichment.py tests/test_event_query_service.py tests/test_collector.py tests/test_engine.py tests/test_semantic_deduper.py` 通过。
 
-### [ ] EIL-303: `evidence_selector` 证据压缩
+### [x] EIL-303: `evidence_selector` 证据压缩
 
 - 主要模块: `src/services/evidence_selector.py`
 - 主要工作:
@@ -424,6 +425,15 @@
 - 验收标准:
   1. 每个入选事件都有紧凑证据包。
   2. 重复同义证据数量显著下降。
+- 当前实现说明:
+  1. `src/services/evidence_selector.py` 已新增 `EvidenceSelector`，提供 `select_event_evidence()` 和 `select_ranked_event_evidence()` 两个 service 入口，分别用于单事件和批量已排序事件的证据压缩。
+  2. 当前实现先采用文章级 evidence package，不做句级摘录；输出结构固定为 `event_id / profile / event_score / supporting_evidence / contradicting_evidence / coverage_notes / selection_metadata`。
+  3. 证据选择规则会综合 `event_query_service` 时间线、`event_ranker` 总分、文章 Tier / source type、primary 角色、数字/政策信号、已覆盖 source 和关键词/实体覆盖，优先保留独立高质量证据并压低重复来源。
+  4. 当事件存在 `contradicting_sources` 或 transition 中显式 conflict article 时，selector 会为 `contradicting_evidence` 保留至少一个证据位，避免后续摘要链路只看单边叙事。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_evidence_selector.py` 通过（3 passed）。
+  2. `.venv/bin/pytest tests/test_evidence_selector.py tests/test_event_ranker.py tests/test_event_query_service.py` 通过（11 passed）。
+  3. `.venv/bin/pytest tests/test_event_enrichment.py` 通过（3 passed）。
 
 ### [ ] EIL-601: 运行指标与结构化日志
 
