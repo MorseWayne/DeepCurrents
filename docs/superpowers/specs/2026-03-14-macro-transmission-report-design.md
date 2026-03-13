@@ -1,116 +1,116 @@
-# Macro Transmission Report Expansion Design
+# 宏观传导链研报扩展设计
 
-## Background
+## 背景
 
-The current event-centric report output is structurally valid but too shallow in its conclusions.
+当前事件驱动型研报虽然结构完整，但结论层明显过浅。
 
-Observed symptoms in the current report flow:
+已观察到的典型问题：
 
-- executive summary, deep insights, and investment trends often restate the same point with little incremental value
-- the report can describe events, but it does not clearly explain the transmission chain from event shock to macro variables to asset pricing to allocation stance
-- when `MarketStrategist` output is sparse, fallback text collapses into generic summary language and loses analytical depth
-- the current schema has no dedicated place for a macro-level transmission thesis or per-asset transmission breakdowns
+- `executiveSummary`、`economicAnalysis` 和 `investmentTrends` 经常重复同一层意思，信息增量很低
+- 报告能够描述事件，但不能清晰解释从事件冲击到宏观变量、再到资产定价和配置含义的完整传导链
+- 当 `MarketStrategist` 输出稀疏时，fallback 会退化成泛化总结语，分析深度明显丢失
+- 当前 schema 中没有专门承载“总主线宏观传导链”或“关键资产传导拆解”的结构化字段
 
-The target improvement is not "longer prose". The target is a higher-dimensional report structure with explicit macro transmission reasoning.
+本次要解决的不是“把文字写长”，而是把研报结论升级为更高维度、更稳定的结构化输出。
 
-## Goal
+## 目标
 
-Extend the daily report format so it always presents:
+扩展日报输出格式，使其稳定呈现：
 
-- one macro-oriented "top-line transmission chain"
-- two to four key asset breakdowns derived from that macro chain
+- 一条偏宏观视角的“总主线传导链”
+- 两到四个从该主线拆解出的“关键资产传导分析”
 
-This must remain compatible with the current pipeline and degrade safely when model output is incomplete.
+该设计必须与当前管线兼容，并在模型输出不完整时安全退化。
 
-## Non-Goals
+## 非目标
 
-- redesigning event ranking, clustering, or evidence selection
-- requiring raw article access in the final report stage
-- replacing existing `investmentTrends`; they remain as concise allocation output
-- broad UI or notification redesign beyond rendering the new sections
+- 不重做事件排序、聚类或证据筛选逻辑
+- 不要求最终研报阶段重新读取原始文章全文
+- 不替换现有 `investmentTrends`；它仍然作为精简版配置结论保留
+- 不做超出新增段落渲染之外的大规模 UI 或通知系统重构
 
-## Approaches Considered
+## 备选方案
 
-### 1. Prompt-only expansion
+### 1. 只改 Prompt 扩写文本
 
-Ask the existing report model to write richer `economicAnalysis` and `investmentTrends` text without changing the schema.
+仅通过 prompt 要求模型把 `economicAnalysis` 和 `investmentTrends` 写得更像“传导链”。
 
-Pros:
+优点：
 
-- smallest implementation surface
-- no downstream model changes
+- 改动面最小
+- 不需要调整下游模型结构
 
-Cons:
+缺点：
 
-- unstable under sparse output
-- difficult to validate or fallback deterministically
-- still mixes macro explanation and asset conclusions into free text
+- 对稀疏输出没有约束力，稳定性差
+- 难以校验，也难以做确定性的 fallback
+- 宏观解释和资产结论仍然混在自由文本里
 
-### 2. Structured report expansion with deterministic fallback (chosen)
+### 2. 扩展结构化输出并配套确定性 fallback（采用）
 
-Add explicit schema fields for a macro transmission chain and asset transmission breakdowns, then normalize and backfill them when the model omits or weakly fills them.
+新增“宏观传导链”和“关键资产拆解”字段，并在模型遗漏或写得过空时做结构化补全。
 
-Pros:
+优点：
 
-- directly addresses the missing report dimensions
-- keeps macro reasoning and asset reasoning separate
-- enables deterministic sparse fallback
-- gives notifier/rendering a stable structure
+- 直接解决研报维度不足的问题
+- 宏观逻辑和资产结论边界清晰
+- 可以对 sparse output 做确定性兜底
+- 给 notifier 和后续展示层稳定的数据结构
 
-Cons:
+缺点：
 
-- requires coordinated updates across models, prompts, parsing, fallback, and rendering
+- 需要联动修改模型、prompt、解析、fallback 和渲染逻辑
 
-### 3. Post-processing only
+### 3. 仅做后处理拼装
 
-Leave the report schema unchanged and programmatically append a derived transmission section after report generation.
+保持现有 schema 不变，在 report 生成后程序化追加一段“传导链”分析。
 
-Pros:
+优点：
 
-- less dependent on LLM compliance
-- easier to ship as a narrow patch
+- 对 LLM 格式服从依赖更低
+- 可以作为较窄的补丁上线
 
-Cons:
+缺点：
 
-- derived analysis quality is capped by existing terse fields
-- creates two parallel report representations
-- does not improve the JSON contract itself
+- 分析质量上限受现有简短字段限制
+- 会形成两套并行的报告表达方式
+- 不能从根本上升级 JSON 合约
 
-## Chosen Design
+## 采用方案
 
-### Report structure
+### 报告结构扩展
 
-Extend `DailyReport` with two optional fields:
+在 `DailyReport` 中新增两个可选字段：
 
 - `macroTransmissionChain`
 - `assetTransmissionBreakdowns`
 
-`macroTransmissionChain` is the single macro thesis for the day. It answers:
+`macroTransmissionChain` 表示当天唯一的一条宏观总主线，用来回答：
 
-- what the primary shock is
-- which macro variables are being repriced first
-- how those variables are flowing into market pricing
-- what that implies for current allocation posture
+- 当前最核心的冲击源是什么
+- 哪些宏观变量最先被重定价
+- 这些变量如何传导到市场定价
+- 这对当前配置姿态意味着什么
 
-Suggested shape:
+建议字段结构：
 
-- `headline`: one-sentence macro thesis
-- `shockSource`: primary event/theme driver
-- `macroVariables`: two to four macro variables
-- `marketPricing`: cross-asset pricing impact summary
-- `allocationImplication`: concise portfolio implication
-- `steps`: ordered three to five step chain with `stage` and `driver`
+- `headline`：一句话宏观主线
+- `shockSource`：主冲击源或主事件主题
+- `macroVariables`：两到四个关键宏观变量
+- `marketPricing`：跨资产定价影响概述
+- `allocationImplication`：配置含义总结
+- `steps`：三到五步的链路节点，每个节点包含 `stage` 和 `driver`
 - `timeframe`
 - `confidence`
 
-`assetTransmissionBreakdowns` holds two to four key assets or asset buckets. Each entry answers:
+`assetTransmissionBreakdowns` 用于承载两到四个关键资产或资产簇的拆解。每条拆解要回答：
 
-- current directional view
-- which part of the macro chain it is expressing
-- why the pricing impulse should continue or fade
-- what signals would confirm or invalidate the view
+- 当前方向判断是什么
+- 这个资产主要表达的是哪一段宏观传导
+- 为什么价格推动仍可能延续，或者为什么已经接近尾声
+- 接下来哪些信号会验证或证伪该判断
 
-Suggested shape per entry:
+建议单条结构：
 
 - `assetClass`
 - `trend`
@@ -121,111 +121,113 @@ Suggested shape per entry:
 - `timeframe`
 - `confidence`
 
-### Report section roles
+### 各段落职责划分
 
-The new section boundaries are explicit:
+扩展后各段落分工如下：
 
-- `executiveSummary`: short top-line framing
-- `macroTransmissionChain`: the main macro transmission logic
-- `globalEvents`: the most important underlying events
-- `economicAnalysis`: supplementary narrative around the macro chain
-- `assetTransmissionBreakdowns`: detailed asset-level transmission views
-- `investmentTrends`: concise allocation summary
+- `executiveSummary`：简要总括
+- `macroTransmissionChain`：主宏观传导逻辑
+- `globalEvents`：最重要的底层事件
+- `economicAnalysis`：对总主线的补充性展开
+- `assetTransmissionBreakdowns`：关键资产的详细拆解
+- `investmentTrends`：简明配置结论
 
-This prevents the current overlap where `economicAnalysis` and `investmentTrends` both attempt to carry the entire analytical load.
+这样可以避免当前 `economicAnalysis` 和 `investmentTrends` 同时承担全部分析负荷，导致重复表述、但没有结构增量的问题。
 
-### Prompt changes
+### Prompt 调整
 
-`MarketStrategist` must be instructed to produce:
+`MarketStrategist` 必须被明确要求输出：
 
-- exactly one `macroTransmissionChain`
-- two to four `assetTransmissionBreakdowns`
-- a clear separation between macro transmission logic and asset-level trade implications
+- 严格一条 `macroTransmissionChain`
+- 两到四条 `assetTransmissionBreakdowns`
+- 宏观传导逻辑与资产配置/交易含义分开表达
 
-Prompt rules should explicitly reject event restatement as a substitute for transmission logic. The model should be told to express the chain in the form:
+Prompt 中需要直接约束模型使用如下思路组织内容：
 
-`shock -> macro variables -> market pricing -> allocation implication`
+`冲击源 -> 宏观变量 -> 市场定价 -> 配置含义`
 
-`MacroAnalyst` and `SentimentAnalyst` can remain structurally unchanged. Their existing outputs continue to feed the strategist, but the strategist becomes responsible for emitting the richer final report schema.
+同时显式禁止模型把“复述事件”当作“传导链分析”。
 
-### Normalization
+`MacroAnalyst` 与 `SentimentAnalyst` 的输出结构可以保持不变。它们继续为 strategist 提供输入，但最终日报中的新增结构由 `MarketStrategist` 负责产出。
 
-`AIService.normalize_daily_report_payload()` should normalize the new fields defensively:
+### 归一化处理
 
-- missing fields become empty optional structures rather than parse failures
-- scalar or malformed list fields are coerced into stable containers where possible
-- `trend`, `timeframe`, and `confidence` are normalized using the same conventions as current investment trends
+`AIService.normalize_daily_report_payload()` 需要对新增字段做防御性归一化：
 
-Normalization should preserve backward compatibility so existing fixtures and historical report payloads continue to parse.
+- 缺失字段不能导致解析失败，应回退为空结构或空列表
+- 标量、错误类型或畸形列表需要尽量整理为稳定容器
+- `trend`、`timeframe`、`confidence` 延用当前投资趋势字段的归一化规则
 
-### Sparse fallback
+归一化必须保持向后兼容，确保历史报告或旧 fixture 在不包含新字段时仍然可以正常解析。
 
-This design requires deterministic fallback rather than prompt-only hope.
+### Sparse Fallback
 
-If `macroTransmissionChain` is missing or too sparse:
+本设计要求“确定性 fallback”，不能只依赖 prompt 提示。
 
-- derive it from the highest-priority selected event and strongest selected theme
-- prefer `stateChange`, `whyItMatters`, `marketChannels`, `regions`, and theme summary fields
-- always emit a usable four-part chain even if phrasing is conservative
+如果 `macroTransmissionChain` 缺失或内容过空：
 
-If `assetTransmissionBreakdowns` is missing or too sparse:
+- 从最高优先级事件和最强主题中推导
+- 优先使用 `stateChange`、`whyItMatters`、`marketChannels`、`regions`、主题 summary 等字段
+- 即使表达较保守，也必须输出一条完整的四段式传导链
 
-- derive two to four entries from `investmentTrends`, selected themes, and selected events
-- guarantee at least one energy/risk-linked asset view when the theme set clearly points there
-- attach explicit watch signals where possible from event or theme metadata
+如果 `assetTransmissionBreakdowns` 缺失或内容过空：
 
-Sparse detection should treat generic phrases such as "geopolitics affects markets" as insufficient.
+- 基于 `investmentTrends`、已选主题和已选事件推导两到四条资产拆解
+- 当主题明显指向能源或风险偏好时，保证至少有一条对应的资产视角
+- 在可用的前提下为每条资产补上可跟踪的验证信号
 
-### Rendering
+Sparse 判定不能只检查字段是否存在，还要把“地缘政治影响市场”这类空泛表述视为无效分析。
 
-Notifier output should add two dedicated sections:
+### 渲染与展示
+
+通知渲染层新增两个明确段落：
 
 - `总主线传导链 | Macro Transmission`
 - `关键资产拆解 | Asset Breakdown`
 
-The rendering order should reflect the intended reading path:
+推荐展示顺序：
 
-1. top-line summary
-2. macro transmission chain
-3. key events
-4. asset breakdowns
-5. concise investment strategy
-6. risk assessment
+1. 核心主线摘要
+2. 总主线传导链
+3. 重大事件
+4. 关键资产拆解
+5. 精简投资结论
+6. 风险评估
 
-Older reports without the new fields must still render cleanly.
+对于不含新字段的旧报告，渲染层仍需保持兼容，不得报错或出现空标题。
 
-## Error Handling
+## 错误处理
 
-- Missing new fields must not cause report parsing failure.
-- Malformed new fields must degrade into empty or normalized structures, not exceptions.
-- Sparse strategist output must trigger targeted fallback for the new fields in addition to existing summary/economic/trend fallback.
-- Logging should capture whether the new fields were model-produced or fallback-produced.
+- 新字段缺失不能导致日报解析失败
+- 新字段格式错误应退化为空结构或归一化结构，而不是抛异常
+- `MarketStrategist` 输出稀疏时，除了现有 summary/economic/trend fallback 外，还要对新增字段做定向补全
+- 日志中应记录新增字段到底来自模型原始输出还是 fallback 补齐
 
-## Observability
+## 可观测性
 
-Add report-stage diagnostics for:
+在 report stage 增加以下诊断指标：
 
-- whether `macroTransmissionChain` is present
-- how many `assetTransmissionBreakdowns` were produced
-- which fields were fallback-filled
+- `macroTransmissionChain` 是否存在
+- `assetTransmissionBreakdowns` 实际产出了多少条
+- 哪些字段触发了 fallback
 
-This is necessary because the current failure mode is not model-call failure; it is low-information successful output.
+原因很明确：当前核心问题不是模型调用失败，而是“调用成功但信息密度不够”。
 
-## Testing Plan
+## 测试计划
 
-- normalization tests for missing and malformed transmission fields
-- orchestrator tests for fallback generation of both new sections
-- notifier/render tests for reports with and without the new fields
-- one manual fixture update to show the new sections in a representative report preview
+- 为新增字段的缺失、畸形格式、错误类型增加 normalization 测试
+- 为 orchestrator 增加宏观传导链与资产拆解的 fallback 测试
+- 为 notifier/render 增加新旧报告兼容渲染测试
+- 更新一个手工 fixture，用于展示新增段落的典型输出
 
-## Success Criteria
+## 成功标准
 
-- the final report always contains a macro-oriented transmission chain unless there is no reportable event context at all
-- the final report contains at least two asset-level transmission breakdowns in normal macro-daily runs
-- `economicAnalysis` no longer carries the entire transmission burden by itself
-- sparse strategist output no longer collapses the report back to low-dimensional summary prose
+- 只要存在可报告事件上下文，最终日报都应包含一条宏观导向的总主线传导链
+- 正常的 `macro_daily` 运行应至少产出两条关键资产拆解
+- `economicAnalysis` 不再独自承担全部传导链表达职责
+- `MarketStrategist` 输出稀疏时，报告不再退化回低维度的泛化总结
 
-## Notes
+## 备注
 
-- This spec documents the approved brainstorming outcome for report-depth expansion.
-- Full skill-prescribed spec-review automation is unavailable in this session because no spec-review subagent or `writing-plans` skill is exposed here.
+- 这份 spec 记录了本轮 brainstorming 确认后的设计结果
+- 当前会话中没有可用的 spec-review subagent 和 `writing-plans` skill，因此无法完整执行技能要求的自动 review 流程
