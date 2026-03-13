@@ -28,10 +28,11 @@
   13. `EIL-203`：已新增 `src/services/event_enrichment.py`，完成从 `event_members + articles + article_features + event_state_transitions` 聚合 regions / entities / assets / market channels / supporting sources / contradicting sources，并将 enrichment 写回 `events.primary_region`、`events.event_type` 与 `events.metadata.enrichment`；同时在 `src/services/collector.py` / `src/engine.py` 接入事件增强主路径，并补齐 `tests/test_event_enrichment.py`、`tests/test_collector.py` 与 `tests/test_engine.py` 的聚合与接线测试。
   14. `EIL-204`：已新增 `src/services/event_query_service.py`，统一提供事件列表查询、时间线回放和调试视图，并复用 `event_enrichment`、`event_state_transitions`、`article_dedup_links` 与 `event_scores` 生成结构化输出；同时在 `src/services/event_repository.py` 补齐 `list_event_scores()`，并通过 `tests/test_event_query_service.py` 与 repository 回归测试固定查询契约。
   15. `EIL-301`：已新增 `src/services/event_ranker.py`，完成 `threat_score / market_impact_score / novelty_score / corroboration_score / source_quality_score / velocity_score / uncertainty_score` 七维规则版打分、`macro_daily` 总分聚合和 `event_scores` 持久化，并通过 `tests/test_event_ranker.py` 固化高影响事件优先、单源冲突事件降权和分数写入契约。
+  16. `EIL-302`：已新增 `src/services/scoring_profiles.py`，将 `macro_daily / risk_daily / strategy_am` 三套 scoring profile 从 `event_ranker` 中抽离，并把 explainability 收敛为 `profile / dimension_scores / weighted_contributions / top_drivers / risk_flags / event_facts` 的稳定结构；同时补齐 `tests/test_event_ranker.py`，验证不同 profile 下排序差异可复现、解释结构完整、未知 profile 明确报错。
 - 下一步:
-  1. `EIL-302`：补齐 scoring profile 与 explainability 输出，确保同一事件集在不同报告 profile 下排序可复现。
-  2. `EIL-303`：引入 `evidence_selector`，为高价值事件生成紧凑证据包并显式保留正反证据。
-  3. `EIL-601`：补齐运行指标与结构化日志，让 Batch 3 的排序与证据 ticket 能直接基于可观测指标验收。
+  1. `EIL-303`：引入 `evidence_selector`，为高价值事件生成紧凑证据包并显式保留正反证据。
+  2. `EIL-601`：补齐运行指标与结构化日志，让 Batch 3 的排序与证据 ticket 能直接基于可观测指标验收。
+  3. `EIL-401`：开始构建 `event_brief` 生成链路，把排序与证据包转成可复用的摘要单元。
 
 ---
 
@@ -386,7 +387,7 @@
   1. `.venv/bin/pytest tests/test_event_ranker.py tests/test_event_intelligence_repositories.py` 通过（13 passed）。
   2. `.venv/bin/pytest tests/test_event_builder.py tests/test_event_state_machine.py tests/test_event_enrichment.py tests/test_event_query_service.py tests/test_collector.py tests/test_engine.py tests/test_semantic_deduper.py` 通过（34 passed）。
 
-### [ ] EIL-302: 评分 profile 与解释日志
+### [x] EIL-302: 评分 profile 与解释日志
 
 - 主要模块: `src/services/scoring_profiles.py`
 - 主要工作:
@@ -400,6 +401,14 @@
 - 验收标准:
   1. 不同 profile 作用于同一事件集时排序可复现。
   2. 每个高分事件都能解释其高分来源。
+- 当前实现说明:
+  1. `src/services/scoring_profiles.py` 已定义 `ScoringProfile` 和 `get_scoring_profile()`，内置 `macro_daily`、`risk_daily`、`strategy_am` 三套权重、标签和说明文本。
+  2. `src/services/event_ranker.py` 已改为在公开入口处解析 profile，并将 `event_scores.payload.explanation` 收敛为 `profile / dimension_scores / weighted_contributions / top_drivers / risk_flags / event_facts` 的稳定结构。
+  3. `rank_events()` 现在会在同一 profile 下按 `total_score` 和 `event_id` 稳定排序，避免相同事件集重复排序时出现不确定结果。
+  4. 未知 profile 会在评分入口直接抛出明确的 `ValueError`，避免静默回退到默认权重。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_event_ranker.py` 通过（5 passed）。
+  2. `.venv/bin/pytest tests/test_event_builder.py tests/test_event_state_machine.py tests/test_event_enrichment.py tests/test_event_query_service.py tests/test_collector.py tests/test_engine.py tests/test_semantic_deduper.py` 通过。
 
 ### [ ] EIL-303: `evidence_selector` 证据压缩
 

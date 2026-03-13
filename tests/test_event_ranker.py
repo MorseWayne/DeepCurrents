@@ -169,7 +169,17 @@ async def test_event_ranker_scores_event_and_persists_all_dimensions():
     assert score["source_quality_score"] > 0.8
     assert score["uncertainty_score"] == pytest.approx(0.0)
     assert score["total_score"] > 0.5
-    assert event_repo.upserted_scores[0]["payload"]["explanation"]["event_type"] == "conflict"
+    explanation = event_repo.upserted_scores[0]["payload"]["explanation"]
+    assert explanation["profile"]["name"] == "macro_daily"
+    assert explanation["dimension_scores"]["threat_score"] == pytest.approx(
+        score["threat_score"]
+    )
+    assert explanation["weighted_contributions"]["uncertainty_penalty"] == pytest.approx(
+        0.0
+    )
+    assert explanation["event_facts"]["event_type"] == "conflict"
+    assert explanation["top_drivers"]
+    assert "escalating_event" in explanation["risk_flags"]
 
 
 @pytest.mark.asyncio
@@ -246,6 +256,110 @@ async def test_event_ranker_ranks_high_impact_event_above_low_value_single_sourc
 
 
 @pytest.mark.asyncio
+async def test_event_ranker_applies_profiles_with_reproducible_different_ordering():
+    event_repo = FakeEventRepository()
+    article_repo = FakeArticleRepository()
+    query_service = FakeEventQueryService()
+    ranker = EventRanker(
+        event_repo,
+        article_repo,
+        query_service,
+        reference_now=datetime(2026, 3, 13, 12, 0, tzinfo=UTC),
+    )
+
+    article_repo.articles = {
+        "art_macro_1": {"article_id": "art_macro_1", "tier": 1, "source_type": "wire"},
+        "art_macro_2": {
+            "article_id": "art_macro_2",
+            "tier": 1,
+            "source_type": "official",
+        },
+        "art_risk_1": {"article_id": "art_risk_1", "tier": 3, "source_type": "news"},
+        "art_risk_2": {"article_id": "art_risk_2", "tier": 3, "source_type": "news"},
+    }
+    query_service.list_result = [
+        {"event_id": "evt_risk"},
+        {"event_id": "evt_macro"},
+    ]
+    query_service.timelines["evt_macro"] = make_timeline(
+        event_id="evt_macro",
+        status="updated",
+        event_type="central_bank",
+        latest_article_at=datetime(2026, 3, 13, 11, 15, tzinfo=UTC),
+        started_at=datetime(2026, 3, 13, 9, 0, tzinfo=UTC),
+        article_count=4,
+        source_count=3,
+        supporting_sources=[
+            {"source_id": "bloomberg"},
+            {"source_id": "ft"},
+            {"source_id": "wsj"},
+        ],
+        contradicting_sources=[],
+        market_channels=[{"name": "rates"}, {"name": "fx"}, {"name": "credit"}],
+        assets=[{"name": "usd"}, {"name": "us10y"}],
+        members=[
+            {"article_id": "art_macro_1"},
+            {"article_id": "art_macro_2"},
+        ],
+        transitions=[
+            {
+                "from_state": "active",
+                "to_state": "updated",
+                "reason": "material_new_facts",
+                "created_at": datetime(2026, 3, 13, 11, 10, tzinfo=UTC),
+            }
+        ],
+    )
+    query_service.timelines["evt_risk"] = make_timeline(
+        event_id="evt_risk",
+        status="escalating",
+        event_type="conflict",
+        latest_article_at=datetime(2026, 3, 13, 11, 50, tzinfo=UTC),
+        started_at=datetime(2026, 3, 13, 11, 0, tzinfo=UTC),
+        article_count=5,
+        source_count=3,
+        supporting_sources=[
+            {"source_id": "reuters"},
+            {"source_id": "ap"},
+        ],
+        contradicting_sources=[{"source_id": "official_denial"}],
+        market_channels=[{"name": "energy"}],
+        assets=[],
+        members=[
+            {"article_id": "art_risk_1"},
+            {"article_id": "art_risk_2"},
+        ],
+        transitions=[
+            {
+                "from_state": "active",
+                "to_state": "updated",
+                "reason": "material_new_facts",
+                "created_at": datetime(2026, 3, 13, 11, 20, tzinfo=UTC),
+            },
+            {
+                "from_state": "updated",
+                "to_state": "escalating",
+                "reason": "impact_scope_expanded",
+                "created_at": datetime(2026, 3, 13, 11, 45, tzinfo=UTC),
+            },
+        ],
+    )
+
+    ranked_macro = await ranker.rank_events(limit=5, profile="macro_daily")
+    ranked_risk_first = await ranker.rank_events(limit=5, profile="risk_daily")
+    ranked_risk_second = await ranker.rank_events(limit=5, profile="risk_daily")
+
+    assert [item["event_id"] for item in ranked_macro] == ["evt_macro", "evt_risk"]
+    assert [item["event_id"] for item in ranked_risk_first] == [
+        "evt_risk",
+        "evt_macro",
+    ]
+    assert [item["event_id"] for item in ranked_risk_first] == [
+        item["event_id"] for item in ranked_risk_second
+    ]
+
+
+@pytest.mark.asyncio
 async def test_event_ranker_penalizes_uncertain_single_source_conflicting_event():
     event_repo = FakeEventRepository()
     article_repo = FakeArticleRepository()
@@ -288,3 +402,19 @@ async def test_event_ranker_penalizes_uncertain_single_source_conflicting_event(
     assert score["uncertainty_score"] >= 0.5
     assert score["corroboration_score"] < 0.3
     assert score["total_score"] < 0.45
+
+
+@pytest.mark.asyncio
+async def test_event_ranker_rejects_unknown_profile():
+    event_repo = FakeEventRepository()
+    article_repo = FakeArticleRepository()
+    query_service = FakeEventQueryService()
+    ranker = EventRanker(
+        event_repo,
+        article_repo,
+        query_service,
+        reference_now=datetime(2026, 3, 13, 12, 0, tzinfo=UTC),
+    )
+
+    with pytest.raises(ValueError, match="Unknown scoring profile: missing_profile"):
+        await ranker.score_event("evt_unknown", profile="missing_profile")

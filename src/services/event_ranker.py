@@ -3,19 +3,34 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, Protocol, Sequence
 
+from .scoring_profiles import ScoringProfile, get_scoring_profile
+
 
 THREAT_EVENT_TYPES = {"conflict", "supply_disruption"}
-HIGH_IMPACT_EVENT_TYPES = {"central_bank", "conflict", "supply_disruption", "macro_data"}
-HIGH_IMPACT_CHANNELS = {"rates", "fx", "commodities", "energy", "credit", "shipping"}
-MACRO_DAILY_WEIGHTS = {
-    "threat_score": 0.14,
-    "market_impact_score": 0.24,
-    "novelty_score": 0.18,
-    "corroboration_score": 0.18,
-    "source_quality_score": 0.14,
-    "velocity_score": 0.08,
-    "uncertainty_penalty": 0.12,
+HIGH_IMPACT_EVENT_TYPES = {
+    "central_bank",
+    "conflict",
+    "supply_disruption",
+    "macro_data",
 }
+HIGH_IMPACT_CHANNELS = {"rates", "fx", "commodities", "energy", "credit", "shipping"}
+DIMENSION_KEYS = (
+    "threat_score",
+    "market_impact_score",
+    "novelty_score",
+    "corroboration_score",
+    "source_quality_score",
+    "velocity_score",
+    "uncertainty_score",
+)
+PROFILE_DIMENSIONS = (
+    "threat_score",
+    "market_impact_score",
+    "novelty_score",
+    "corroboration_score",
+    "source_quality_score",
+    "velocity_score",
+)
 
 
 class EventRepositoryLike(Protocol):
@@ -70,10 +85,11 @@ class EventRanker:
         *,
         profile: str = "macro_daily",
     ) -> dict[str, Any]:
+        scoring_profile = get_scoring_profile(profile)
         timeline = await self.event_query_service.get_event_timeline(event_id)
         score_payload = await self._build_score_payload(
             timeline,
-            profile=profile,
+            profile=scoring_profile,
         )
         return await self.event_repository.upsert_event_score(score_payload)
 
@@ -83,12 +99,18 @@ class EventRanker:
         *,
         profile: str = "macro_daily",
     ) -> list[dict[str, Any]]:
+        scoring_profile = get_scoring_profile(profile)
         results: list[dict[str, Any]] = []
         for event_id in event_ids:
             normalized = self._text(event_id)
             if not normalized:
                 continue
-            results.append(await self.score_event(normalized, profile=profile))
+            timeline = await self.event_query_service.get_event_timeline(normalized)
+            score_payload = await self._build_score_payload(
+                timeline,
+                profile=scoring_profile,
+            )
+            results.append(await self.event_repository.upsert_event_score(score_payload))
         return results
 
     async def rank_events(
@@ -100,6 +122,7 @@ class EventRanker:
         limit: int = 100,
         profile: str = "macro_daily",
     ) -> list[dict[str, Any]]:
+        scoring_profile = get_scoring_profile(profile)
         event_items = await self.event_query_service.list_events(
             statuses=statuses,
             since=since,
@@ -111,7 +134,12 @@ class EventRanker:
             event_id = self._text(item.get("event_id"))
             if not event_id:
                 continue
-            scored = await self.score_event(event_id, profile=profile)
+            timeline = await self.event_query_service.get_event_timeline(event_id)
+            score_payload = await self._build_score_payload(
+                timeline,
+                profile=scoring_profile,
+            )
+            scored = await self.event_repository.upsert_event_score(score_payload)
             ranked.append(
                 {
                     "event_id": event_id,
@@ -120,20 +148,57 @@ class EventRanker:
                     "event": dict(item),
                 }
             )
-        ranked.sort(key=lambda item: item["total_score"], reverse=True)
+        ranked.sort(
+            key=lambda item: (-item["total_score"], self._text(item.get("event_id")))
+        )
         return ranked[:limit]
 
     async def _build_score_payload(
         self,
         timeline: Mapping[str, Any],
         *,
-        profile: str,
+        profile: ScoringProfile,
     ) -> dict[str, Any]:
         event = self._mapping(timeline.get("event"))
         enrichment = self._mapping(timeline.get("enrichment"))
         members = self._sequence_of_mappings(timeline.get("members"))
         transitions = self._sequence_of_mappings(timeline.get("transitions"))
 
+        dimension_scores = await self._dimension_scores(
+            event=event,
+            enrichment=enrichment,
+            members=members,
+            transitions=transitions,
+        )
+        total_score = self._total_score(dimension_scores, profile)
+        event_id = self._text(event.get("event_id"))
+        scored_at = self._now()
+
+        payload = {
+            "event_id": event_id,
+            "profile": profile.name,
+            **dimension_scores,
+            "total_score": total_score,
+            "payload": self._build_payload(
+                event=event,
+                enrichment=enrichment,
+                dimension_scores=dimension_scores,
+                profile=profile,
+                member_count=len(members),
+                total_score=total_score,
+            ),
+            "scored_at": scored_at,
+        }
+        return payload
+
+    async def _dimension_scores(
+        self,
+        *,
+        event: Mapping[str, Any],
+        enrichment: Mapping[str, Any],
+        members: Sequence[Mapping[str, Any]],
+        transitions: Sequence[Mapping[str, Any]],
+    ) -> dict[str, float]:
         threat_score = self._threat_score(event, enrichment)
         market_impact_score = self._market_impact_score(event, enrichment)
         novelty_score = self._novelty_score(event, enrichment)
@@ -141,22 +206,7 @@ class EventRanker:
         source_quality_score = await self._source_quality_score(members)
         velocity_score = self._velocity_score(event, members, transitions)
         uncertainty_score = self._uncertainty_score(event, enrichment)
-
-        total_score = self._total_score(
-            threat_score=threat_score,
-            market_impact_score=market_impact_score,
-            novelty_score=novelty_score,
-            corroboration_score=corroboration_score,
-            source_quality_score=source_quality_score,
-            velocity_score=velocity_score,
-            uncertainty_score=uncertainty_score,
-        )
-        event_id = self._text(event.get("event_id"))
-        scored_at = self._now()
-
-        payload = {
-            "event_id": event_id,
-            "profile": profile,
+        return {
             "threat_score": threat_score,
             "market_impact_score": market_impact_score,
             "novelty_score": novelty_score,
@@ -164,30 +214,142 @@ class EventRanker:
             "source_quality_score": source_quality_score,
             "velocity_score": velocity_score,
             "uncertainty_score": uncertainty_score,
-            "total_score": total_score,
-            "payload": {
-                "weights": dict(MACRO_DAILY_WEIGHTS),
-                "explanation": {
-                    "event_type": self._text(event.get("event_type"))
-                    or self._text(enrichment.get("event_type")),
-                    "market_channels": self._extract_names(
-                        enrichment.get("market_channels")
-                    ),
-                    "supporting_sources": len(
-                        enrichment.get("supporting_sources", [])
-                    ),
-                    "contradicting_sources": len(
-                        enrichment.get("contradicting_sources", [])
-                    ),
-                    "last_transition": self._mapping(
-                        enrichment.get("last_transition")
-                    ),
-                },
-                "member_count": len(members),
-            },
-            "scored_at": scored_at,
         }
-        return payload
+
+    def _build_payload(
+        self,
+        *,
+        event: Mapping[str, Any],
+        enrichment: Mapping[str, Any],
+        dimension_scores: Mapping[str, float],
+        profile: ScoringProfile,
+        member_count: int,
+        total_score: float,
+    ) -> dict[str, Any]:
+        weights = profile.weights()
+        weighted_contributions = {
+            key: round(
+                self._safe_float(dimension_scores.get(key)) * self._safe_float(weights[key]),
+                3,
+            )
+            for key in PROFILE_DIMENSIONS
+        }
+        weighted_contributions["uncertainty_penalty"] = round(
+            -self._safe_float(dimension_scores.get("uncertainty_score"))
+            * self._safe_float(weights["uncertainty_penalty"]),
+            3,
+        )
+
+        explanation = self._build_explanation(
+            event=event,
+            enrichment=enrichment,
+            profile=profile,
+            dimension_scores=dimension_scores,
+            weighted_contributions=weighted_contributions,
+            member_count=member_count,
+            total_score=total_score,
+        )
+        return {
+            "weights": dict(weights),
+            "explanation": explanation,
+            "member_count": member_count,
+        }
+
+    def _build_explanation(
+        self,
+        *,
+        event: Mapping[str, Any],
+        enrichment: Mapping[str, Any],
+        profile: ScoringProfile,
+        dimension_scores: Mapping[str, float],
+        weighted_contributions: Mapping[str, float],
+        member_count: int,
+        total_score: float,
+    ) -> dict[str, Any]:
+        supporting_source_ids = self._source_ids(enrichment.get("supporting_sources"))
+        contradicting_source_ids = self._source_ids(
+            enrichment.get("contradicting_sources")
+        )
+        unique_source_count = len(supporting_source_ids | contradicting_source_ids)
+        top_drivers = [
+            {"dimension": key, "contribution": value}
+            for key, value in sorted(
+                weighted_contributions.items(),
+                key=lambda item: abs(item[1]),
+                reverse=True,
+            )[:3]
+        ]
+        risk_flags = self._risk_flags(
+            event=event,
+            enrichment=enrichment,
+            source_count=unique_source_count
+            or self._safe_int(event.get("source_count")),
+            uncertainty_score=self._safe_float(dimension_scores.get("uncertainty_score")),
+        )
+        return {
+            "profile": {
+                "name": profile.name,
+                "label": profile.label,
+                "description": profile.description,
+            },
+            "dimension_scores": {
+                key: round(self._safe_float(dimension_scores.get(key)), 3)
+                for key in DIMENSION_KEYS
+            },
+            "weighted_contributions": dict(weighted_contributions),
+            "top_drivers": top_drivers,
+            "risk_flags": risk_flags,
+            "event_facts": {
+                "event_type": self._text(event.get("event_type"))
+                or self._text(enrichment.get("event_type")),
+                "status": self._text(event.get("status")),
+                "market_channels": self._extract_names(
+                    enrichment.get("market_channels")
+                ),
+                "assets": self._extract_names(enrichment.get("assets")),
+                "source_count": max(
+                    self._safe_int(event.get("source_count")),
+                    unique_source_count,
+                ),
+                "member_count": max(
+                    self._safe_int(enrichment.get("member_count")),
+                    member_count,
+                ),
+                "supporting_source_count": len(supporting_source_ids),
+                "contradicting_source_count": len(contradicting_source_ids),
+                "last_transition": self._mapping(enrichment.get("last_transition")),
+                "total_score": total_score,
+            },
+        }
+
+    def _risk_flags(
+        self,
+        *,
+        event: Mapping[str, Any],
+        enrichment: Mapping[str, Any],
+        source_count: int,
+        uncertainty_score: float,
+    ) -> list[str]:
+        flags: list[str] = []
+        status = self._text(event.get("status")).casefold()
+        event_type = self._text(event.get("event_type")) or self._text(
+            enrichment.get("event_type")
+        )
+        contradicting_source_count = len(
+            self._source_ids(enrichment.get("contradicting_sources"))
+        )
+
+        if status == "escalating":
+            flags.append("escalating_event")
+        if event_type in THREAT_EVENT_TYPES:
+            flags.append("high_threat_event")
+        if source_count <= 1:
+            flags.append("single_source_event")
+        if contradicting_source_count > 0:
+            flags.append("conflicting_sources_present")
+        if uncertainty_score >= 0.5:
+            flags.append("elevated_uncertainty")
+        return flags
 
     def _threat_score(
         self,
@@ -199,7 +361,8 @@ class EventRanker:
         )
         status = self._text(event.get("status")).casefold()
         channels = {
-            name.casefold() for name in self._extract_names(enrichment.get("market_channels"))
+            name.casefold()
+            for name in self._extract_names(enrichment.get("market_channels"))
         }
 
         score = 0.2
@@ -209,7 +372,7 @@ class EventRanker:
             score += 0.2
         if {"shipping", "energy", "credit"} & channels:
             score += 0.1
-        if self._text(event.get("canonical_title")).casefold().find("attack") >= 0:
+        if "attack" in self._text(event.get("canonical_title")).casefold():
             score += 0.1
         return round(min(score, 1.0), 3)
 
@@ -222,7 +385,8 @@ class EventRanker:
             enrichment.get("event_type")
         )
         channels = {
-            name.casefold() for name in self._extract_names(enrichment.get("market_channels"))
+            name.casefold()
+            for name in self._extract_names(enrichment.get("market_channels"))
         }
         assets = self._extract_names(enrichment.get("assets"))
 
@@ -285,7 +449,10 @@ class EventRanker:
             self._safe_int(enrichment.get("member_count")),
         )
 
-        score = min(supporting_sources * 0.25 + source_count * 0.1 + article_count * 0.04, 1.0)
+        score = min(
+            supporting_sources * 0.25 + source_count * 0.1 + article_count * 0.04,
+            1.0,
+        )
         if contradicting_sources > 0:
             score = max(0.0, score - min(0.15 * contradicting_sources, 0.45))
         return round(score, 3)
@@ -358,10 +525,7 @@ class EventRanker:
         contradicting_sources = len(contradicting_source_ids)
         supporting_sources = len(supporting_source_ids)
         unique_source_count = len(supporting_source_ids | contradicting_source_ids)
-        source_count = max(
-            self._safe_int(event.get("source_count")),
-            unique_source_count,
-        )
+        source_count = max(self._safe_int(event.get("source_count")), unique_source_count)
 
         score = 0.0
         if source_count <= 1:
@@ -382,23 +546,17 @@ class EventRanker:
 
     def _total_score(
         self,
-        *,
-        threat_score: float,
-        market_impact_score: float,
-        novelty_score: float,
-        corroboration_score: float,
-        source_quality_score: float,
-        velocity_score: float,
-        uncertainty_score: float,
+        dimension_scores: Mapping[str, float],
+        profile: ScoringProfile,
     ) -> float:
-        total = (
-            threat_score * MACRO_DAILY_WEIGHTS["threat_score"]
-            + market_impact_score * MACRO_DAILY_WEIGHTS["market_impact_score"]
-            + novelty_score * MACRO_DAILY_WEIGHTS["novelty_score"]
-            + corroboration_score * MACRO_DAILY_WEIGHTS["corroboration_score"]
-            + source_quality_score * MACRO_DAILY_WEIGHTS["source_quality_score"]
-            + velocity_score * MACRO_DAILY_WEIGHTS["velocity_score"]
-            - uncertainty_score * MACRO_DAILY_WEIGHTS["uncertainty_penalty"]
+        weights = profile.weights()
+        total = 0.0
+        for key in PROFILE_DIMENSIONS:
+            total += self._safe_float(dimension_scores.get(key)) * self._safe_float(
+                weights[key]
+            )
+        total -= self._safe_float(dimension_scores.get("uncertainty_score")) * (
+            self._safe_float(weights["uncertainty_penalty"])
         )
         return round(max(total, 0.0), 3)
 
