@@ -216,6 +216,19 @@ class EventRepository:
         )
         return normalize_row(row)
 
+    async def list_event_scores(self, event_id: str) -> list[dict[str, Any]]:
+        pool = ensure_pool(self._pool)
+        rows = await pool.fetch(
+            """
+            SELECT *
+            FROM event_scores
+            WHERE event_id = $1
+            ORDER BY total_score DESC, scored_at DESC, profile ASC
+            """,
+            event_id,
+        )
+        return normalize_rows(rows)
+
     async def record_state_transition(
         self, transition: Mapping[str, Any]
     ) -> dict[str, Any]:

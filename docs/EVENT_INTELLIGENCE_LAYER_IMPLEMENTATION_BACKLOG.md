@@ -11,7 +11,7 @@
 ## 0. 开发进度
 
 - 更新时间: 2026-03-13
-- 当前批次: `Batch 2`
+- 当前批次: `Batch 3`
 - 已完成:
   1. `EIL-000`：已落地 `tests/fixtures/event_intelligence/`、`tests/evaluation/fixture_loader.py`、`tests/test_event_intelligence_fixture_loader.py`，固定三类评估样本并提供可重复加载入口。
   2. `EIL-001`：已在 `src/config/settings.py` 增加 Event Intelligence runtime 配置项，在 `src/services/event_intelligence_bootstrap.py` 建立最小 bootstrap 骨架，并接入 `src/engine.py` / `src/run_report.py` 的共享启动路径。
@@ -26,10 +26,11 @@
   11. `EIL-201`：已在 `src/services/event_builder.py` 落地事件候选检索与“加入已有事件 / 创建新事件”分流主路径，完成 `events` / `event_members` 写入与计数字段维护，并通过 `tests/test_event_builder.py` 固化 article-to-event 映射契约。
   12. `EIL-202`：已新增 `src/services/event_state_machine.py`，并在 `src/services/event_builder.py` 中接入 embedding / 实体 / 区域 / 时间 / 冲突规则的多信号合并判定、`new|active|updated|escalating|stabilizing|resolved|dormant` 状态机和 `event_state_transitions` 审计写入；同时补齐 `tests/test_event_state_machine.py`、`tests/test_event_builder.py` 与 `tests/test_engine.py` 的迁移与接线测试。
   13. `EIL-203`：已新增 `src/services/event_enrichment.py`，完成从 `event_members + articles + article_features + event_state_transitions` 聚合 regions / entities / assets / market channels / supporting sources / contradicting sources，并将 enrichment 写回 `events.primary_region`、`events.event_type` 与 `events.metadata.enrichment`；同时在 `src/services/collector.py` / `src/engine.py` 接入事件增强主路径，并补齐 `tests/test_event_enrichment.py`、`tests/test_collector.py` 与 `tests/test_engine.py` 的聚合与接线测试。
+  14. `EIL-204`：已新增 `src/services/event_query_service.py`，统一提供事件列表查询、时间线回放和调试视图，并复用 `event_enrichment`、`event_state_transitions`、`article_dedup_links` 与 `event_scores` 生成结构化输出；同时在 `src/services/event_repository.py` 补齐 `list_event_scores()`，并通过 `tests/test_event_query_service.py` 与 repository 回归测试固定查询契约。
 - 下一步:
-  1. `EIL-204`：补齐事件检索、状态回放和调试接口，为评估与人工 review 提供统一查询入口。
-  2. `EIL-301`：在 enrichment 稳定输出上接 `event_ranker`，开始把 threat / impact / novelty / corroboration 等维度写入 `event_scores`。
-  3. 做一轮带真实 PostgreSQL / Redis / Qdrant 的本地联调，确认 schema bootstrap、store health、repository 读写以及 article feature / vector write / event transition / event enrichment 边界在真实依赖下正常工作。
+  1. `EIL-301`：在 enrichment 稳定输出上接 `event_ranker`，开始把 threat / impact / novelty / corroboration 等维度写入 `event_scores`。
+  2. `EIL-302`：补齐 scoring profile 与 explainability 输出，确保同一事件集在不同报告 profile 下排序可复现。
+  3. `EIL-601`：补齐运行指标与结构化日志，让 Batch 3 的排序与证据 ticket 能直接基于可观测指标验收。
 
 ---
 
@@ -334,7 +335,7 @@
   1. `.venv/bin/pytest tests/test_event_enrichment.py tests/test_collector.py tests/test_engine.py` 通过（17 passed）。
   2. `.venv/bin/pytest tests/test_event_builder.py tests/test_event_state_machine.py tests/test_semantic_deduper.py tests/test_event_intelligence_repositories.py` 通过（24 passed）。
 
-### [ ] EIL-204: 事件检索、回放与调试接口
+### [x] EIL-204: 事件检索、回放与调试接口
 
 - 主要模块: `src/services/event_query_service.py`
 - 主要工作:
@@ -348,6 +349,14 @@
 - 验收标准:
   1. 任一事件都可回放其成员与状态变化。
   2. 评估和摘要模块无需直接拼底层多表查询。
+- 当前实现说明:
+  1. `src/services/event_query_service.py` 已新增 `EventQueryService`，提供 `list_events()`、`get_event_timeline()`、`get_event_debug_view()` 三个入口，统一封装事件列表查询、时间线回放和调试视图。
+  2. `list_events()` 已支持按 `event_id`、时间窗、状态过滤，并使用 `event_type` 与 `metadata.enrichment.market_channels` 的近似匹配实现轻量主题过滤。
+  3. `get_event_timeline()` 会统一返回 `event / members / transitions / enrichment / scores`；`get_event_debug_view()` 会进一步聚合成员文章、去重关系和规则化 debug notes，便于排查误合并、单源事件和去重命中情况。
+  4. `src/services/event_repository.py` 已补齐 `list_event_scores()`，使查询服务无需直接拼接 `event_scores` 的底层 SQL。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_event_query_service.py tests/test_event_intelligence_repositories.py` 通过（13 passed）。
+  2. `.venv/bin/pytest tests/test_event_builder.py tests/test_event_state_machine.py tests/test_event_enrichment.py tests/test_collector.py tests/test_engine.py tests/test_semantic_deduper.py` 通过（31 passed）。
 
 ---
 

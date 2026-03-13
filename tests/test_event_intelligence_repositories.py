@@ -227,6 +227,7 @@ async def test_event_repository_manages_members_scores_and_transitions():
         {"transition_id": "tr_1", "event_id": "evt_1", "to_state": "updated"},
     ]
     pool.connection.fetch_results = [
+        [{"event_id": "evt_1", "profile": "macro_daily", "total_score": 8.2}],
         [{"event_id": "evt_1", "article_id": "art_1"}],
         [{"transition_id": "tr_1", "event_id": "evt_1"}],
     ]
@@ -243,6 +244,7 @@ async def test_event_repository_manages_members_scores_and_transitions():
         {"event_id": "evt_1", "profile": "macro_daily", "total_score": 8.2}
     )
     loaded_score = await repo.get_event_score("evt_1", "macro_daily")
+    listed_scores = await repo.list_event_scores("evt_1")
     transition = await repo.record_state_transition(
         {"transition_id": "tr_1", "event_id": "evt_1", "to_state": "updated"}
     )
@@ -252,6 +254,7 @@ async def test_event_repository_manages_members_scores_and_transitions():
     assert member["role"] == "primary"
     assert score["total_score"] == 8.2
     assert loaded_score == score
+    assert listed_scores == [{"event_id": "evt_1", "profile": "macro_daily", "total_score": 8.2}]
     assert transition["to_state"] == "updated"
     assert members == [{"event_id": "evt_1", "article_id": "art_1"}]
     assert transitions == [{"transition_id": "tr_1", "event_id": "evt_1"}]
@@ -261,6 +264,7 @@ async def test_event_repository_manages_members_scores_and_transitions():
         pool.connection.calls[2][1]
         == "SELECT * FROM event_scores WHERE event_id = $1 AND profile = $2"
     )
+    assert "FROM event_scores" in pool.connection.calls[3][1]
 
 
 @pytest.mark.asyncio
