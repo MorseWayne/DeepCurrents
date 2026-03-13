@@ -27,9 +27,10 @@
   12. `EIL-202`：已新增 `src/services/event_state_machine.py`，并在 `src/services/event_builder.py` 中接入 embedding / 实体 / 区域 / 时间 / 冲突规则的多信号合并判定、`new|active|updated|escalating|stabilizing|resolved|dormant` 状态机和 `event_state_transitions` 审计写入；同时补齐 `tests/test_event_state_machine.py`、`tests/test_event_builder.py` 与 `tests/test_engine.py` 的迁移与接线测试。
   13. `EIL-203`：已新增 `src/services/event_enrichment.py`，完成从 `event_members + articles + article_features + event_state_transitions` 聚合 regions / entities / assets / market channels / supporting sources / contradicting sources，并将 enrichment 写回 `events.primary_region`、`events.event_type` 与 `events.metadata.enrichment`；同时在 `src/services/collector.py` / `src/engine.py` 接入事件增强主路径，并补齐 `tests/test_event_enrichment.py`、`tests/test_collector.py` 与 `tests/test_engine.py` 的聚合与接线测试。
   14. `EIL-204`：已新增 `src/services/event_query_service.py`，统一提供事件列表查询、时间线回放和调试视图，并复用 `event_enrichment`、`event_state_transitions`、`article_dedup_links` 与 `event_scores` 生成结构化输出；同时在 `src/services/event_repository.py` 补齐 `list_event_scores()`，并通过 `tests/test_event_query_service.py` 与 repository 回归测试固定查询契约。
+  15. `EIL-301`：已新增 `src/services/event_ranker.py`，完成 `threat_score / market_impact_score / novelty_score / corroboration_score / source_quality_score / velocity_score / uncertainty_score` 七维规则版打分、`macro_daily` 总分聚合和 `event_scores` 持久化，并通过 `tests/test_event_ranker.py` 固化高影响事件优先、单源冲突事件降权和分数写入契约。
 - 下一步:
-  1. `EIL-301`：在 enrichment 稳定输出上接 `event_ranker`，开始把 threat / impact / novelty / corroboration 等维度写入 `event_scores`。
-  2. `EIL-302`：补齐 scoring profile 与 explainability 输出，确保同一事件集在不同报告 profile 下排序可复现。
+  1. `EIL-302`：补齐 scoring profile 与 explainability 输出，确保同一事件集在不同报告 profile 下排序可复现。
+  2. `EIL-303`：引入 `evidence_selector`，为高价值事件生成紧凑证据包并显式保留正反证据。
   3. `EIL-601`：补齐运行指标与结构化日志，让 Batch 3 的排序与证据 ticket 能直接基于可观测指标验收。
 
 ---
@@ -362,7 +363,7 @@
 
 ## 7. Batch 3 - Ranking, Evidence, Metrics
 
-### [ ] EIL-301: `event_ranker` 核心打分引擎
+### [x] EIL-301: `event_ranker` 核心打分引擎
 
 - 主要模块: `src/services/event_ranker.py`
 - 主要工作:
@@ -376,6 +377,14 @@
 - 验收标准:
   1. 事件可按多维分数稳定排序。
   2. 高频但低价值事件不再轻易冲到前列。
+- 当前实现说明:
+  1. `src/services/event_ranker.py` 已新增 `EventRanker`，提供 `score_event()`、`score_events()`、`rank_events()` 三个入口，直接复用 `event_query_service.get_event_timeline()` 做规则版事件打分。
+  2. 当前实现已覆盖 `threat_score / market_impact_score / novelty_score / corroboration_score / source_quality_score / velocity_score / uncertainty_score` 七个维度，并用内置 `macro_daily` 权重合成 `total_score`。
+  3. 评分结果会通过 `EventRepository.upsert_event_score()` 持久化到 `event_scores`，同时在 `payload` 中保存权重与解释信息，供后续 `EIL-302` 扩展 profile 和 explainability。
+  4. `rank_events()` 已支持按状态、时间窗、主题过滤事件并返回按总分排序的结果，作为后续 `EIL-303` / `EIL-401` 的输入基础。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_event_ranker.py tests/test_event_intelligence_repositories.py` 通过（13 passed）。
+  2. `.venv/bin/pytest tests/test_event_builder.py tests/test_event_state_machine.py tests/test_event_enrichment.py tests/test_event_query_service.py tests/test_collector.py tests/test_engine.py tests/test_semantic_deduper.py` 通过（34 passed）。
 
 ### [ ] EIL-302: 评分 profile 与解释日志
 
