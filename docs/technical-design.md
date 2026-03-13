@@ -85,21 +85,22 @@ DeepCurrents 从多源 RSS / RSSHub 信息流中抓取文章，执行 article-fi
 - 从事件层压缩得到可报告的 `event briefs` 与 `theme briefs`
 - 让 AI 读事件卡，而不是文章列表
 
-### 2.6 AI 生成层
+### 2.6 AI 生成层 (金融级多智能体流水线)
 
-- 报告编排: `src/services/report_orchestrator.py`
-- 共用 AI 能力: `src/services/ai_service.py`
-- 角色流程:
-  - MacroAnalyst 并行
-  - SentimentAnalyst 并行
-  - MarketStrategist 总整合
-- 支持主/备模型回退
-- AIService 当前责任:
-  - provider window / input budget 计算
-  - 市场行情上下文构建
-  - agent 调用
-  - JSON 修复与 schema 归一化
-  - 预测持久化
+- **报告编排**: `src/services/report_orchestrator.py`
+- **角色协作流 (Phase 3 辩论机制)**:
+  1. **MacroAnalyst (V2)**: 识别宏观传导逻辑、政策意图与预期差 (Surprise)。
+  2. **SentimentAnalyst (V2)**: 识别市场情绪底色、筹码分布与 Risk-on/off 状态。
+  3. **MarketStrategist (CIO V2)**: 整合各方信息，产出包含**配对交易 (Pair Trades)**、**全球大盘综述 (Equity Overview)** 与**场景推演 (Scenario Analysis)** 的策略初稿。
+  4. **RiskManager (CRO)**: 对 CIO 初稿执行逻辑挑战，确保合规性、中立性并强化尾部风险提示。
+- **决策支持**:
+  - **宏观因子注入**: 自动集成 VIX (波动率)、US10Y-2Y (收益率曲线) 等实时信号。
+  - **资产精准映射**: LLM 驱动的 Ticker/ETF 映射 (如 Brent, GC=F, SPY)。
+- **AIService 核心责任**:
+  - Provider window / input budget 动态计算。
+  - JSON 修复与金融 Schema 强制归一化。
+  - 预测持久化与策略回测打标。
+
 
 ### 2.7 报告追溯与评估层
 

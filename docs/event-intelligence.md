@@ -11,13 +11,12 @@
 - 运行时依赖 PostgreSQL、Qdrant、Redis；预测评分仍使用 SQLite `predictions`。
 - runtime 未启用或启动失败时，采集和研报入口都保持 fail-closed，不再回退旧文章级链路。
 
-## 首轮已完成范围
+## 关键核心演进 (2026-03-14)
 
-- runtime bootstrap、schema bootstrap、repository 边界已经落地。
-- article-first ingestion、特征抽取、cheap/semantic dedup、事件构建、状态机和事件增强已经落地。
-- 排序、证据选择、event brief、theme brief、report context builder 已经接入正式主链路。
-- report orchestrator、report run tracker、evaluation runner、feedback 写入与查询能力已经落地。
-- 旧 `raw_news -> classifier -> clustering -> generate_daily_report()` 主链路已经退役。
+- **深度事件摘要 (`llm_v1`)**: 事件总结器不再依赖硬编码模板，支持基于 LLM 的跨文章逻辑整合，能够识别因果传导路径与资产定价影响。
+- **增强型金融富化**: 事件富化服务接入 AI 语义识别，支持自动映射具体资产标的 (Tickers)、提取受影响的金融频道 (Market Channels) 并识别地缘/宏观因子。
+- **动态配额与上下文预算**: 重构了 `ContextQuotaPolicy`，放宽了 `macro_daily` 等策略的事件容量上限，并允许按主题重要性动态分配 Token 预算。
+- **宏观决策因子化**: 将 VIX、10Y-2Y 息差等行情指标作为一级决策因子注入 Agent 系统，提升了在无新闻时期的策略深度。
 
 ## 明确未完成或仍在迭代的部分
 
