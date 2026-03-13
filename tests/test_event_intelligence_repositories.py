@@ -8,6 +8,7 @@ from src.services.article_models import ArticleRecord
 from src.services.article_repository import ArticleRepository
 from src.services.brief_repository import BriefRepository
 from src.services.event_repository import EventRepository
+from src.services.feedback_repository import FeedbackRepository
 from src.services.report_repository import ReportRepository
 
 
@@ -406,3 +407,50 @@ async def test_report_repository_replaces_event_links_in_transaction():
     assert pool.connection.calls[0][0] == "execute"
     assert "DELETE FROM report_event_links" in pool.connection.calls[0][1]
     assert "INSERT INTO report_event_links" in pool.connection.calls[1][1]
+
+
+@pytest.mark.asyncio
+async def test_feedback_repository_creates_and_lists_labels():
+    pool = FakePool()
+    repo = FeedbackRepository(pool)
+    pool.connection.fetchrow_results = [
+        {"label_id": "label_1", "label_type": "report_review", "subject_id": "run_1"}
+    ]
+    pool.connection.fetch_results = [
+        [
+            {
+                "label_id": "label_1",
+                "label_type": "report_review",
+                "subject_id": "run_1",
+            }
+        ]
+    ]
+
+    created = await repo.create_label(
+        {
+            "label_id": "label_1",
+            "label_type": "report_review",
+            "subject_id": "run_1",
+            "label_value": {"issue_type": "summary_distortion"},
+            "source": "manual",
+            "notes": "review notes",
+        }
+    )
+    listed = await repo.list_labels(
+        label_type="report_review",
+        subject_id="run_1",
+        source="manual",
+        limit=5,
+    )
+
+    assert created["label_id"] == "label_1"
+    assert listed == [
+        {
+            "label_id": "label_1",
+            "label_type": "report_review",
+            "subject_id": "run_1",
+        }
+    ]
+    assert "INSERT INTO evaluation_labels" in pool.connection.calls[0][1]
+    assert "FROM evaluation_labels" in pool.connection.calls[1][1]
+    assert "label_type = $1 AND subject_id = $2 AND source = $3" in pool.connection.calls[1][1]

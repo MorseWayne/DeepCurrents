@@ -40,9 +40,9 @@
   25. `EIL-503`：已新增 `src/services/report_run_tracker.py`，将 `report_runs` 与 `report_event_links` 的落库、trace 回放与最新报告追溯封装为独立 service；同时扩展 `src/services/report_repository.py` 增加 `list_report_runs()`，让 `report_orchestrator` 在 event-centric 报告生成成功后自动写回报告元信息、事件链接和状态变化追溯，并补齐 tracker / repository / orchestrator 三层测试。
   26. `EIL-504`：已在 `src/engine.py` 完成 event-centric report stack runtime wiring，并将 `generate_and_send_report()` 切换到 `report_orchestrator` 主路径；同时基于最近一次 `completed report_run` 计算增量 `since` 窗口，使 `run_report.py` 与 `main.py` 继续通过统一的 `engine.generate_and_send_report()` 入口复用新链路，而不再触发旧文章级 `AIService.generate_daily_report()`；另外在 `src/services/report_orchestrator.py` 增加空上下文短路逻辑，并通过 `tests/test_engine.py`、`tests/test_report_orchestrator.py`、`tests/test_run_report.py` 固化“无增量事件直接跳过”的行为。
   27. `EIL-602`：已新增 `src/services/evaluation_runner.py`，将 duplicate、same-event、top-event relevance 三类自动评估和 `final_report_review` 占位 suite 收敛为统一离线 runner，并输出稳定的 suite/result summary schema；同时补齐 `tests/test_evaluation_runner.py`，新增 `tests/fixtures/event_intelligence/evaluation_result_sample.json` 作为结果样例，并通过 fixture loader / tokenizer 回归测试固定默认 heuristics 与可注入 evaluator 行为。
+  28. `EIL-603`：已新增 `src/services/feedback_repository.py` 与 `src/services/feedback_service.py`，为 `evaluation_labels` 建立 report-centric feedback first 的写入与查询路径，支持 `report_review` / `report_event_review` 两类人工反馈、基于 `report_run_id` 的 trace 自动补全，以及按 `issue_type` 聚合调优动作建议；同时补齐 `tests/test_feedback_service.py` 和 repository 契约测试，固定 trace 内外目标、过滤查询与调优建议映射行为。
 - 下一步:
-  1. `EIL-603`：引入人工反馈与标注闭环，把 report trace 反接到后续调优链路。
-  2. `EIL-604`：删除旧文章级正式主链路并完成文档清理。
+  1. `EIL-604`：删除旧文章级正式主链路并完成文档清理。
 
 ---
 
@@ -691,7 +691,7 @@
   1. `.venv/bin/pytest tests/test_evaluation_runner.py tests/test_event_intelligence_fixture_loader.py` 通过（9 passed）。
   2. `.venv/bin/pytest tests/test_evaluation_runner.py tests/test_event_intelligence_fixture_loader.py tests/test_tokenizer.py` 通过（13 passed）。
 
-### [ ] EIL-603: 人工反馈与标注闭环
+### [x] EIL-603: 人工反馈与标注闭环
 
 - 主要模块: `src/services/feedback_service.py`
 - 主要工作:
@@ -705,6 +705,12 @@
 - 验收标准:
   1. 人工 review 结果可结构化入库。
   2. 反馈字段能够映射到后续调优动作。
+- 当前实现说明:
+  1. 已新增 `src/services/feedback_repository.py`，为 `evaluation_labels` 提供最小 `create_label()` / `list_labels()` repository 边界；同时新增 `src/services/feedback_service.py`，基于 `report_run_id` 作为主 `subject_id` 实现 `record_report_review()`、`record_report_event_review()`、`list_feedback()` 与 `summarize_feedback_actions()` 四个入口。
+  2. 第一版反馈模型采用 report-centric feedback first：`label_type` 收敛为 `report_review` 与 `report_event_review` 两类，`label_value` 中固定承载 `issue_type / decision / target / context / reviewer` 结构，并支持 `false_merge`、`missed_event`、`weak_evidence`、`summary_distortion`、`ranking_error` 五类问题映射到后续调优建议。
+  3. `feedback_service` 可选复用 `ReportRunTracker.get_report_trace()`，在事件级反馈写入时自动补充 `brief_id`、`state_change`、`why_it_matters` 与 `evidence_refs`；若目标事件不在当前 report trace 中，则仍允许写入，但会在 `label_value.context.out_of_trace_target=true` 中显式标记为 trace 外目标，以支持“漏报事件”这类反馈场景。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_feedback_service.py tests/test_event_intelligence_repositories.py tests/test_report_run_tracker.py` 通过（19 passed）。
 
 ### [ ] EIL-604: 旧模块删除与最终清理
 
