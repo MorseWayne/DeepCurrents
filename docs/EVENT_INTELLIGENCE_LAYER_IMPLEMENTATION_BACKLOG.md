@@ -39,10 +39,10 @@
   24. `EIL-502`：已新增 `src/services/report_orchestrator.py`，把 event-centric report flow 从 `ai_service.py` 中拆成独立 orchestrator，统一编排 context builder、Prompt v2、多智能体调用、strategist 输入 guard、JSON 解析、指标回写和预测持久化；同时保留 `AIService.generate_daily_report()` 作为兼容旧文章级入口，并补齐 `tests/test_report_orchestrator.py` 验证新主路径。
   25. `EIL-503`：已新增 `src/services/report_run_tracker.py`，将 `report_runs` 与 `report_event_links` 的落库、trace 回放与最新报告追溯封装为独立 service；同时扩展 `src/services/report_repository.py` 增加 `list_report_runs()`，让 `report_orchestrator` 在 event-centric 报告生成成功后自动写回报告元信息、事件链接和状态变化追溯，并补齐 tracker / repository / orchestrator 三层测试。
   26. `EIL-504`：已在 `src/engine.py` 完成 event-centric report stack runtime wiring，并将 `generate_and_send_report()` 切换到 `report_orchestrator` 主路径；同时基于最近一次 `completed report_run` 计算增量 `since` 窗口，使 `run_report.py` 与 `main.py` 继续通过统一的 `engine.generate_and_send_report()` 入口复用新链路，而不再触发旧文章级 `AIService.generate_daily_report()`；另外在 `src/services/report_orchestrator.py` 增加空上下文短路逻辑，并通过 `tests/test_engine.py`、`tests/test_report_orchestrator.py`、`tests/test_run_report.py` 固化“无增量事件直接跳过”的行为。
+  27. `EIL-602`：已新增 `src/services/evaluation_runner.py`，将 duplicate、same-event、top-event relevance 三类自动评估和 `final_report_review` 占位 suite 收敛为统一离线 runner，并输出稳定的 suite/result summary schema；同时补齐 `tests/test_evaluation_runner.py`，新增 `tests/fixtures/event_intelligence/evaluation_result_sample.json` 作为结果样例，并通过 fixture loader / tokenizer 回归测试固定默认 heuristics 与可注入 evaluator 行为。
 - 下一步:
-  1. `EIL-602`：补齐统一回归评估 runner，为报告栈重接后的质量回归准备固定基线。
-  2. `EIL-603`：引入人工反馈与标注闭环，把 report trace 反接到后续调优链路。
-  3. `EIL-604`：删除旧文章级正式主链路并完成文档清理。
+  1. `EIL-603`：引入人工反馈与标注闭环，把 report trace 反接到后续调优链路。
+  2. `EIL-604`：删除旧文章级正式主链路并完成文档清理。
 
 ---
 
@@ -668,7 +668,7 @@
 
 ## 10. Batch 6 - Evaluation, Feedback, Cleanup
 
-### [ ] EIL-602: 回归评估套件
+### [x] EIL-602: 回归评估套件
 
 - 主要模块: `tests/evaluation/`、`src/services/evaluation_runner.py`
 - 主要工作:
@@ -683,6 +683,13 @@
   1. 可以一键复算核心质量指标。
   2. 评估输出足以判断是否达到 `5:1` 压缩比、`80%+` Top30 精度等目标。
   3. 评估结果可同时复算 token 消耗、重复事件泄漏率和关键事件遗漏率。
+- 当前实现说明:
+  1. 已新增 `src/services/evaluation_runner.py`，提供离线 `EvaluationRunner.run_all()` 统一入口，收敛 `duplicate_pairs`、`same_event_pairs`、`top_event_relevance` 三类自动 suite，以及 `final_report_review` 的 `not_configured` 占位 suite，并统一输出 `generated_at / profile / suites / summary` 结构。
+  2. runner 第一版采用可注入 evaluator 设计：`duplicate_relation_resolver`、`same_event_resolver` 与 `ranked_event_provider` 都可由调用方替换；默认实现则使用 URL/title 规范化、多语言 token + marker overlap 和 fixture 内排序基线，确保在不启动 runtime 的前提下也能稳定复算固定评估集。
+  3. 已新增 `tests/fixtures/event_intelligence/evaluation_result_sample.json` 作为结果样例，并更新 `tests/fixtures/event_intelligence/README.md` 说明其用途；`final_report_review` 目前不会阻断自动回归，而是明确返回 `status=not_configured`，为后续 `EIL-603` 的人工标注接线保留固定 schema。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_evaluation_runner.py tests/test_event_intelligence_fixture_loader.py` 通过（9 passed）。
+  2. `.venv/bin/pytest tests/test_evaluation_runner.py tests/test_event_intelligence_fixture_loader.py tests/test_tokenizer.py` 通过（13 passed）。
 
 ### [ ] EIL-603: 人工反馈与标注闭环
 
