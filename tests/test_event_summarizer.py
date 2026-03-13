@@ -80,6 +80,25 @@ class FakeEvidenceSelector:
         return [dict(item) for item in self.ranked_packages[:limit]]
 
 
+class FakeAIService:
+    def __init__(self, response: str):
+        self.response = response
+        self.calls: list[dict[str, Any]] = []
+
+    async def call_agent(
+        self, name: str, system_prompt: str, user_content: str, use_json: bool = True
+    ) -> str:
+        self.calls.append(
+            {
+                "name": name,
+                "system_prompt": system_prompt,
+                "user_content": user_content,
+                "use_json": use_json,
+            }
+        )
+        return self.response
+
+
 def make_score(
     *,
     profile: str,
@@ -222,6 +241,86 @@ async def test_event_summarizer_persists_rule_based_event_brief():
     assert "market impact" in brief_json["whyItMatters"]
     assert summarizer.last_brief_metrics["briefs_generated"] == 1
     mock_log_metrics.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_event_summarizer_uses_llm_brief_when_json_response_parses():
+    brief_repo = FakeBriefRepository()
+    query_service = FakeEventQueryService()
+    evidence_selector = FakeEvidenceSelector()
+    ai_service = FakeAIService(
+        json.dumps(
+            {
+                "canonicalTitle": "LLM rewrite of shipping disruption",
+                "stateChange": "escalated",
+                "coreFacts": ["Rerouting is lifting freight and energy risk premiums."],
+                "whyItMatters": "Supply disruption matters for commodities.",
+                "analysis": "Risk is concentrated in shipping and crude logistics.",
+                "confidence": 0.93,
+            }
+        )
+    )
+    summarizer = EventSummarizer(
+        brief_repo,
+        query_service,
+        evidence_selector,
+        ai_service=ai_service,
+    )
+
+    query_service.timelines["evt_shipping"] = make_timeline(
+        event_id="evt_shipping",
+        status="escalating",
+        event_type="conflict",
+        canonical_title="Missile strike disrupts Red Sea shipping lane",
+        article_count=4,
+        source_count=3,
+        channels=["energy", "shipping"],
+        regions=["red sea"],
+        assets=["brent"],
+        transitions=[
+            {
+                "to_state": "escalating",
+                "reason": "impact_scope_expanded",
+            }
+        ],
+    )
+    evidence_selector.event_packages["evt_shipping"] = {
+        "event_id": "evt_shipping",
+        "profile": "risk_daily",
+        "event_score": make_score(
+            profile="risk_daily",
+            total_score=0.91,
+            novelty_score=0.82,
+            corroboration_score=0.86,
+            source_quality_score=0.9,
+            uncertainty_score=0.08,
+            top_drivers=["market_impact_score", "threat_score"],
+        ),
+        "supporting_evidence": [
+            {
+                "article_id": "art_1",
+                "source_id": "reuters",
+                "title": "Missile strike disrupts Red Sea shipping lane",
+            },
+        ],
+        "contradicting_evidence": [],
+    }
+
+    with patch("src.services.event_summarizer.logger.warning") as mock_warning:
+        brief = await summarizer.summarize_event(
+            "evt_shipping",
+            profile="risk_daily",
+            evidence_limit=1,
+        )
+
+    brief_json = brief["brief_json"]
+    assert brief_json["canonicalTitle"] == "LLM rewrite of shipping disruption"
+    assert brief_json["whyItMatters"] == "Supply disruption matters for commodities."
+    assert brief_json["analysis"] == "Risk is concentrated in shipping and crude logistics."
+    assert brief_json["confidence"] == pytest.approx(0.93)
+    assert ai_service.calls[0]["name"] == "EventSummarizer"
+    assert ai_service.calls[0]["use_json"] is True
+    mock_warning.assert_not_called()
 
 
 @pytest.mark.asyncio

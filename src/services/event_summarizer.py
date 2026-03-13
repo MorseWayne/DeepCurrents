@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+import json
 from typing import Any, Protocol
 
 from ..utils.logger import get_logger
@@ -62,21 +63,29 @@ class EvidenceSelectorLike(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
+class AIServiceLike(Protocol):
+    async def call_agent(
+        self, name: str, system_prompt: str, user_content: str, use_json: bool = True
+    ) -> str: ...
+
+
 class EventSummarizer:
     def __init__(
         self,
         brief_repository: BriefRepositoryLike,
         event_query_service: EventQueryLike,
         evidence_selector: EvidenceSelectorLike,
+        ai_service: AIServiceLike | None = None,
         *,
         version: str = "v1",
-        model: str = "rule_template_v1",
+        model: str = "llm_v1",
     ):
         self.brief_repository = brief_repository
         self.event_query_service = event_query_service
         self.evidence_selector = evidence_selector
+        self.ai_service = ai_service
         self.version = version
-        self.model = model
+        self.model = "rule_template_v1" if ai_service is None and model == "llm_v1" else model
         self.last_brief_metrics: dict[str, Any] = {}
 
     async def summarize_event(
@@ -167,7 +176,7 @@ class EventSummarizer:
         profile: str,
         version: str,
     ) -> dict[str, Any]:
-        brief_json = self._build_brief_json(
+        brief_json = await self._build_brief_json(
             timeline=timeline,
             evidence_package=evidence_package,
             profile=profile,
@@ -185,13 +194,15 @@ class EventSummarizer:
             }
         )
 
-    def _build_brief_json(
+    async def _build_brief_json(
         self,
         *,
         timeline: Mapping[str, Any],
         evidence_package: Mapping[str, Any],
         profile: str,
     ) -> dict[str, Any]:
+        from .prompts import EVENT_SUMMARIZER_PROMPT, build_event_summarizer_input
+
         event = self._mapping(timeline.get("event"))
         enrichment = self._mapping(timeline.get("enrichment"))
         transitions = self._sequence_of_mappings(timeline.get("transitions"))
@@ -219,7 +230,6 @@ class EventSummarizer:
             self._safe_int(event.get("article_count")),
             self._safe_int(enrichment.get("member_count")),
         )
-
         state_change = self._state_change(event, transitions)
         confidence = self._confidence_score(event_score)
         novelty = self._label(
@@ -230,6 +240,13 @@ class EventSummarizer:
             self._safe_float(event_score.get("corroboration_score")),
             CORROBORATION_LABELS,
         )
+        evidence_refs = [
+            self._text(item.get("article_id"))
+            for item in [*supporting_evidence, *contradicting_evidence]
+            if self._text(item.get("article_id"))
+        ]
+        last_transition = self._last_transition(event, transitions)
+        top_drivers = self._top_driver_names(event_score)
         contradictions = [
             {
                 "articleId": self._text(item.get("article_id")),
@@ -239,15 +256,74 @@ class EventSummarizer:
             for item in contradicting_evidence
             if self._text(item.get("article_id"))
         ]
-        evidence_refs = [
-            self._text(item.get("article_id"))
-            for item in [*supporting_evidence, *contradicting_evidence]
-            if self._text(item.get("article_id"))
-        ]
-        last_transition = self._last_transition(event, transitions)
-        top_drivers = self._top_driver_names(event_score)
+        total_score = round(self._safe_float(event_score.get("total_score")), 3)
 
-        brief = {
+        # 尝试调用 LLM 生成摘要
+        if self.ai_service and self.model == "llm_v1":
+            try:
+                llm_input = build_event_summarizer_input(
+                    event_title=self._text(event.get("canonical_title")),
+                    event_type=event_type,
+                    articles=supporting_evidence,
+                )
+                raw_json = await self.ai_service.call_agent(
+                    "EventSummarizer",
+                    EVENT_SUMMARIZER_PROMPT,
+                    llm_input,
+                    use_json=True,
+                )
+                parsed = json.loads(raw_json)
+                
+                # 融合基础结构与 LLM 分析
+                return {
+                    "eventId": event_id,
+                    "canonicalTitle": parsed.get("canonicalTitle")
+                    or self._text(event.get("canonical_title")),
+                    "stateChange": parsed.get("stateChange") or state_change,
+                    "coreFacts": parsed.get("coreFacts") or self._core_facts(
+                        event=event,
+                        event_type=event_type,
+                        state_change=state_change,
+                        source_count=source_count,
+                        article_count=article_count,
+                        regions=regions,
+                        channels=channels,
+                        supporting_evidence=supporting_evidence,
+                        contradicting_evidence=contradicting_evidence,
+                    ),
+                    "whyItMatters": parsed.get("whyItMatters")
+                    or self._why_it_matters(
+                        event_type=event_type,
+                        state_change=state_change,
+                        channels=channels,
+                        top_drivers=top_drivers,
+                        confidence=confidence,
+                        contradictions=contradictions,
+                    ),
+                    "analysis": parsed.get("analysis") or "",
+                    "marketChannels": channels,
+                    "regions": regions,
+                    "assets": assets,
+                    "confidence": parsed.get("confidence") or confidence,
+                    "novelty": novelty,
+                    "corroboration": corroboration,
+                    "evidenceRefs": evidence_refs,
+                    "contradictions": contradictions,
+                    "profile": profile,
+                    "status": status,
+                    "lastTransition": {
+                        "toState": self._text(last_transition.get("to_state")),
+                        "reason": self._text(last_transition.get("reason")),
+                    },
+                    "generatedAt": datetime.now(UTC).isoformat(),
+                    "eventType": event_type,
+                    "totalScore": total_score,
+                }
+            except Exception as e:
+                logger.warning(f"LLM event summarization failed, falling back to rule-template: {e}")
+
+        # Fallback 到旧的 rule_template_v1 逻辑
+        return {
             "eventId": event_id,
             "canonicalTitle": self._text(event.get("canonical_title")),
             "stateChange": state_change,
@@ -279,16 +355,15 @@ class EventSummarizer:
             "evidenceRefs": evidence_refs,
             "contradictions": contradictions,
             "profile": profile,
-            "eventType": event_type,
             "status": status,
-            "totalScore": round(self._safe_float(event_score.get("total_score")), 3),
             "lastTransition": {
                 "toState": self._text(last_transition.get("to_state")),
                 "reason": self._text(last_transition.get("reason")),
             },
             "generatedAt": datetime.now(UTC).isoformat(),
+            "eventType": event_type,
+            "totalScore": total_score,
         }
-        return brief
 
     def _core_facts(
         self,
