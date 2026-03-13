@@ -203,6 +203,10 @@ class ReportOrchestrator:
         parsed_json = await self.ai_service.parse_daily_report_json(final_raw)
         report = DailyReport(**parsed_json)
         report.date = resolved_report_date.isoformat()
+        report = self._apply_sparse_report_fallback(
+            report=report,
+            context_package=context_package,
+        )
 
         self.last_context_package = dict(context_package)
         self.last_report_guard_stats = dict(guard_stats)
@@ -238,6 +242,165 @@ class ReportOrchestrator:
                 guard_stats=guard_stats,
             )
         return report
+
+    def _apply_sparse_report_fallback(
+        self,
+        *,
+        report: DailyReport,
+        context_package: Mapping[str, Any],
+    ) -> DailyReport:
+        selected_events = self._sequence_of_mappings(
+            context_package.get("selected_event_briefs")
+        )
+        selected_themes = self._sequence_of_mappings(
+            context_package.get("selected_theme_briefs")
+        )
+        if not selected_events and not selected_themes:
+            return report
+
+        default_summary = "暂无明确主线，建议关注后续数据更新。"
+        fallback_fields: list[str] = []
+        payload = report.model_dump()
+
+        if self._is_sparse_text(report.executiveSummary, default_summary):
+            payload["executiveSummary"] = self._fallback_executive_summary(
+                selected_events
+            )
+            fallback_fields.append("executiveSummary")
+
+        if self._is_sparse_text(report.economicAnalysis, default_summary):
+            payload["economicAnalysis"] = self._fallback_economic_analysis(
+                selected_events=selected_events,
+                selected_themes=selected_themes,
+            )
+            fallback_fields.append("economicAnalysis")
+
+        if not report.investmentTrends:
+            payload["investmentTrends"] = self._fallback_investment_trends(
+                selected_events=selected_events,
+                selected_themes=selected_themes,
+            )
+            fallback_fields.append("investmentTrends")
+
+        if fallback_fields:
+            logger.warning(
+                "MarketStrategist output sparse; applied fallback fields: "
+                + ", ".join(fallback_fields)
+            )
+            return DailyReport(**payload)
+        return report
+
+    def _fallback_executive_summary(
+        self, selected_events: Sequence[Mapping[str, Any]]
+    ) -> str:
+        brief_json = self._first_event_brief(selected_events)
+        title = self._text(brief_json.get("canonicalTitle"))
+        why = self._text(brief_json.get("whyItMatters"))
+        state = self._text(brief_json.get("stateChange"))
+        if title and why:
+            if state:
+                return f"{title}（{state}）正在主导市场叙事，核心影响为：{why}"
+            return f"{title}正在主导市场叙事，核心影响为：{why}"
+        if why:
+            return why
+        if title:
+            return f"{title}是当前最需要关注的事件主线。"
+        return "当前事件链正在重定价市场预期，建议关注后续变化。"
+
+    def _fallback_economic_analysis(
+        self,
+        *,
+        selected_events: Sequence[Mapping[str, Any]],
+        selected_themes: Sequence[Mapping[str, Any]],
+    ) -> str:
+        event_brief = self._first_event_brief(selected_events)
+        theme_brief = self._first_theme_brief(selected_themes)
+        why = self._text(event_brief.get("whyItMatters"))
+        regions = self._text_list(event_brief.get("regions"))
+        channels = self._text_list(event_brief.get("marketChannels"))
+        theme_summary = self._text(theme_brief.get("summary"))
+        theme_name = (
+            self._text(theme_brief.get("displayName"))
+            or self._text(theme_brief.get("themeKey"))
+        )
+
+        parts: list[str] = []
+        if why:
+            parts.append(why)
+        if theme_name:
+            if theme_summary:
+                parts.append(f"主题“{theme_name}”显示：{theme_summary}")
+            else:
+                parts.append(f"当前市场主线集中在“{theme_name}”相关链条。")
+        if regions:
+            parts.append(f"重点区域包括：{', '.join(regions[:3])}。")
+        if channels:
+            parts.append(f"主要影响通道为：{', '.join(channels[:3])}。")
+        if not parts:
+            return "当前事件链仍在演化，建议结合后续数据跟踪跨资产传导。"
+        return " ".join(parts)
+
+    def _fallback_investment_trends(
+        self,
+        *,
+        selected_events: Sequence[Mapping[str, Any]],
+        selected_themes: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, str]]:
+        trends: list[dict[str, str]] = []
+        seen_asset_classes: set[str] = set()
+
+        for theme in selected_themes[:3]:
+            brief_json = self._mapping(theme.get("brief_json"))
+            theme_key = self._text(brief_json.get("themeKey")).lower()
+            display_name = (
+                self._text(brief_json.get("displayName"))
+                or self._text(brief_json.get("themeKey"))
+                or "Macro Basket"
+            )
+            summary = (
+                self._text(brief_json.get("summary"))
+                or "主题事件仍在演化，建议保持跟踪。"
+            )
+            asset_class = display_name
+            trend = "Neutral"
+            if "energy" in theme_key or "commodit" in theme_key:
+                asset_class = "Energy"
+                trend = "Bullish"
+            elif "risk" in theme_key or "geopolit" in theme_key:
+                asset_class = "Risk Assets"
+                trend = "Neutral"
+            if asset_class in seen_asset_classes:
+                continue
+            trends.append(
+                {
+                    "assetClass": asset_class,
+                    "trend": trend,
+                    "rationale": summary,
+                }
+            )
+            seen_asset_classes.add(asset_class)
+
+        if trends:
+            return trends
+
+        event_brief = self._first_event_brief(selected_events)
+        why = self._text(event_brief.get("whyItMatters")) or "事件影响路径仍在形成。"
+        channels = {channel.lower() for channel in self._text_list(event_brief.get("marketChannels"))}
+        if {"energy", "commodities", "shipping"} & channels:
+            return [
+                {
+                    "assetClass": "Energy",
+                    "trend": "Bullish",
+                    "rationale": why,
+                }
+            ]
+        return [
+            {
+                "assetClass": "Macro Basket",
+                "trend": "Neutral",
+                "rationale": why,
+            }
+        ]
 
     def _build_empty_report_metrics(
         self,
@@ -382,6 +545,40 @@ class ReportOrchestrator:
         if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
             return []
         return [dict(item) for item in value if isinstance(item, Mapping)]
+
+    def _text_list(self, value: Any) -> list[str]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return []
+        result: list[str] = []
+        for item in value:
+            text = self._text(item)
+            if text:
+                result.append(text)
+        return result
+
+    def _first_event_brief(
+        self,
+        selected_events: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        if not selected_events:
+            return {}
+        first = self._mapping(selected_events[0])
+        return self._mapping(first.get("brief_json"))
+
+    def _first_theme_brief(
+        self,
+        selected_themes: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        if not selected_themes:
+            return {}
+        first = self._mapping(selected_themes[0])
+        return self._mapping(first.get("brief_json"))
+
+    def _is_sparse_text(self, value: Any, default_text: str) -> bool:
+        text = self._text(value)
+        if not text:
+            return True
+        return text == default_text
 
     @staticmethod
     def _text(value: Any) -> str:

@@ -91,6 +91,34 @@ class FakeAIService:
         self.persisted_reports.append(report)
 
 
+class SparseStrategistAIService(FakeAIService):
+    async def call_agent(
+        self,
+        name: str,
+        system_prompt: str,
+        user_content: str,
+        use_json: bool = True,
+    ) -> str:
+        if name in {"MacroAnalyst", "SentimentAnalyst"}:
+            return await super().call_agent(name, system_prompt, user_content, use_json)
+        self.agent_calls.append(
+            {
+                "name": name,
+                "system_prompt": system_prompt,
+                "user_content": user_content,
+                "use_json": use_json,
+            }
+        )
+        return """{
+            "date": "YYYY-MM-DD",
+            "intelligenceDigest": [],
+            "executiveSummary": "暂无明确主线，建议关注后续数据更新。",
+            "globalEvents": [],
+            "economicAnalysis": "暂无明确主线，建议关注后续数据更新。",
+            "investmentTrends": []
+        }"""
+
+
 class FakeReportRunTracker:
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
@@ -331,6 +359,25 @@ async def test_report_orchestrator_overrides_report_date_with_requested_date():
 
     assert isinstance(report, DailyReport)
     assert report.date == "2026-03-14"
+
+
+@pytest.mark.asyncio
+async def test_report_orchestrator_fills_sparse_strategist_output_from_context():
+    ai_service = SparseStrategistAIService()
+    builder = FakeReportContextBuilder()
+    orchestrator = ReportOrchestrator(ai_service, builder)
+
+    report = await orchestrator.generate_event_centric_report(
+        statuses=["new", "updated"],
+        profile="macro_daily",
+        report_date=date(2026, 3, 14),
+    )
+
+    assert isinstance(report, DailyReport)
+    assert report.date == "2026-03-14"
+    assert report.executiveSummary != "暂无明确主线，建议关注后续数据更新。"
+    assert report.economicAnalysis != "暂无明确主线，建议关注后续数据更新。"
+    assert len(report.investmentTrends) >= 1
 
 
 @pytest.mark.asyncio
