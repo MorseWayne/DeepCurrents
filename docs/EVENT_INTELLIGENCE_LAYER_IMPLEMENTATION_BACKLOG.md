@@ -33,10 +33,11 @@
   18. `EIL-601`：已新增 `src/services/metrics.py`，建立 ingestion / ranking / evidence / report 四阶段指标汇总与结构化日志 helper，并在 `collector`、`event_ranker`、`evidence_selector`、`ai_service`、`engine` 接入运行时指标输出；同时补齐 `tests/test_metrics.py` 及相关服务测试，固定压缩率、单源比例、冲突保留率和 report budget 指标契约。
   19. `EIL-401`：已新增 `src/services/event_summarizer.py`，完成规则版 `event_brief` 生成与持久化，把 `event_query_service + evidence_selector + event_ranker` 的结构化输出收敛为稳定事件卡 schema，并写入 `event_briefs`；同时补齐 `tests/test_event_summarizer.py`，验证字段结构、冲突保留和 ranked briefs 顺序契约。
   20. `EIL-402`：已新增 `src/services/theme_summarizer.py`，基于固定 taxonomy 和 `region:*` 补充桶，将 ranked `event_brief` 聚合为规则版 `theme_brief`，并写入 `theme_briefs`；同时补齐 `tests/test_theme_summarizer.py`，验证主题归类、区域桶生成、结构化输出和无匹配主题时的失败契约。
+  21. `EIL-403`：已新增 `src/services/report_context_builder.py`，完成 event/theme brief 驱动的 report context 组装、预算裁剪和多样性约束，并输出结构化 `context_package` 与 prompt-ready 文本块；同时补齐 `tests/test_report_context_builder.py`，验证预算紧张时的主题优先裁剪、事件轻量降级、同主题/同区域去挤占和服务层接线契约。
 - 下一步:
-  1. `EIL-403`：补齐 `report_context_builder`，把 event/theme brief 压成最终 report 输入层。
-  2. `EIL-404`：定义 market context 配额和上下文预算裁剪策略，让 brief 层能稳定进入多智能体报告栈。
-  3. `EIL-501`：开始重写 Macro / Sentiment / Strategist 的 event-centric 报告输入栈。
+  1. `EIL-404`：定义 market context 配额和上下文预算裁剪策略，让 brief 层能稳定进入多智能体报告栈。
+  2. `EIL-501`：开始重写 Macro / Sentiment / Strategist 的 event-centric 报告输入栈。
+  3. `EIL-502`：让 strategist 只消费 event/theme/market context，而不再直读文章列表。
 
 ---
 
@@ -511,7 +512,7 @@
   1. `.venv/bin/pytest tests/test_theme_summarizer.py` 通过（3 passed）。
   2. `.venv/bin/pytest tests/test_event_summarizer.py tests/test_event_intelligence_repositories.py` 通过（13 passed）。
 
-### [ ] EIL-403: `report_context_builder` 上下文构建器
+### [x] EIL-403: `report_context_builder` 上下文构建器
 
 - 主要模块: `src/services/report_context_builder.py`
 - 主要工作:
@@ -525,6 +526,14 @@
 - 验收标准:
   1. 新上下文不再直接消费文章列表。
   2. token 使用量相对现状明显下降。
+- 当前实现说明:
+  1. `src/services/report_context_builder.py` 已新增 `ReportContextBuilder`，提供 `build_context()`、`build_prompt_sections()` 和 `build_context_from_services()` 三个入口，统一消费 `event_brief`、`theme_brief` 和外部注入的 `market_context`。
+  2. 当前实现采用最小规则版预算逻辑：先为 market context 预留固定份额，再以事件优先、主题补充的顺序选入上下文；在超预算时先舍弃低价值主题卡，再把事件卡从完整模式降为轻量模式，最后才删除事件卡。
+  3. builder 会对同一主主题和同一区域施加事件位上限，避免单一冲突或单一区域霸占上下文；同时保留 `context_package`、`prompt_sections`、`budget_summary`、`coverage_summary` 和 `truncation_summary` 供后续 `EIL-404/501` 直接复用。
+  4. 服务会输出 `context` 阶段结构化日志，保存最近一次 `last_context_metrics`，用于验证预算利用率、压缩比例和 hard-cap 命中情况。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_report_context_builder.py` 通过（4 passed）。
+  2. `.venv/bin/pytest tests/test_report_context_builder.py tests/test_event_summarizer.py tests/test_theme_summarizer.py tests/test_event_intelligence_repositories.py` 通过（20 passed）。
 
 ### [ ] EIL-404: 市场上下文适配与预算配额策略
 
