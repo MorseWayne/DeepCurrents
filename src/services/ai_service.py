@@ -4,7 +4,6 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Literal, Tuple
-from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 from ..config.settings import CONFIG
 from ..config.asset_symbols import resolve_asset_symbol, get_default_market_symbols
@@ -12,54 +11,19 @@ from .db_service import DBService, NewsRecord
 from .clustering import ClusteredEvent, generate_cluster_context
 from .classifier import THREAT_LABELS
 from .metrics import build_report_metrics
+from .report_models import (
+    AgentInsights,
+    DailyReport,
+    GlobalEvent,
+    IntelligenceItem,
+    IntelSource,
+    InvestmentTrend,
+)
 from ..utils.market_data import get_market_price, search_market_symbol
 from ..utils.logger import get_logger
 from .prompts import MACRO_ANALYST_PROMPT, SENTIMENT_ANALYST_PROMPT, MARKET_STRATEGIST_PROMPT
 
 logger = get_logger("ai-service")
-
-# ── 研报输出结构定义 (Pydantic Models) ──
-
-class GlobalEvent(BaseModel):
-    title: str
-    detail: str
-    category: Optional[str] = None
-    threatLevel: Optional[str] = None
-
-class InvestmentTrend(BaseModel):
-    assetClass: str
-    trend: Literal['Bullish', 'Bearish', 'Neutral']
-    rationale: str
-    confidence: Optional[float] = Field(None, ge=0, le=100)
-    timeframe: Optional[str] = None
-
-class IntelSource(BaseModel):
-    name: str
-    tier: int
-    url: Optional[str] = None
-
-class IntelligenceItem(BaseModel):
-    content: str
-    category: str
-    sources: List[IntelSource]
-    credibility: str
-    credibilityReason: str
-    importance: str
-
-class AgentInsights(BaseModel):
-    macro: Optional[str] = None
-    sentiment: Optional[str] = None
-
-class DailyReport(BaseModel):
-    date: str
-    intelligenceDigest: List[IntelligenceItem]
-    executiveSummary: str
-    globalEvents: List[GlobalEvent]
-    economicAnalysis: str
-    investmentTrends: List[InvestmentTrend]
-    agentInsights: Optional[AgentInsights] = None
-    riskAssessment: Optional[str] = None
-    sourceAnalysis: Optional[str] = None
 
 # ── Token 预算管理 ──
 

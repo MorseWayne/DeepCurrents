@@ -35,10 +35,11 @@
   20. `EIL-402`：已新增 `src/services/theme_summarizer.py`，基于固定 taxonomy 和 `region:*` 补充桶，将 ranked `event_brief` 聚合为规则版 `theme_brief`，并写入 `theme_briefs`；同时补齐 `tests/test_theme_summarizer.py`，验证主题归类、区域桶生成、结构化输出和无匹配主题时的失败契约。
   21. `EIL-403`：已新增 `src/services/report_context_builder.py`，完成 event/theme brief 驱动的 report context 组装、预算裁剪和多样性约束，并输出结构化 `context_package` 与 prompt-ready 文本块；同时补齐 `tests/test_report_context_builder.py`，验证预算紧张时的主题优先裁剪、事件轻量降级、同主题/同区域去挤占和服务层接线契约。
   22. `EIL-404`：已新增 `src/services/context_quota_policy.py`，将 `macro_daily / risk_daily / strategy_am` 三套上下文预算与多样性上限从 `report_context_builder` 中抽离；同时扩展 `src/utils/market_data.py`，新增结构化 `market_context` snapshot 与渲染 helper，并让 `report_context_builder` 支持 policy 驱动的预算分配、region theme 上限和结构化市场上下文渲染。
+  23. `EIL-501`：已新增 `src/services/report_models.py`，将 `DailyReport` 及其相关输出模型从 `ai_service.py` 中抽离，并补充 `MacroAnalystOutput`、`SentimentAnalystOutput` 两个 v2 agent 输出 schema；同时重写 `src/services/prompts.py`，新增 event-centric Prompt v2 和 3 个输入拼装 helper，并保持旧 prompt 常量与 `ai_service` 顶层导出兼容。
 - 下一步:
-  1. `EIL-501`：开始重写 Macro / Sentiment / Strategist 的 event-centric 报告输入栈。
-  2. `EIL-502`：让 strategist 只消费 event/theme/market context，而不再直读文章列表。
-  3. `EIL-503`：补齐 report run 与 event/theme 引用写回，建立报告可追溯关系。
+  1. `EIL-502`：让 strategist 只消费 event/theme/market context，而不再直读文章列表。
+  2. `EIL-503`：补齐 report run 与 event/theme 引用写回，建立报告可追溯关系。
+  3. `EIL-504`：重接 engine / run_report / 调度入口，彻底切出旧文章级报告路径。
 
 ---
 
@@ -563,7 +564,7 @@
 
 ## 9. Batch 5 - Report Stack
 
-### [ ] EIL-501: 多智能体输入/输出契约与 Prompt v2
+### [x] EIL-501: 多智能体输入/输出契约与 Prompt v2
 
 - 主要模块: `src/services/prompts.py`、`src/services/report_models.py`
 - 主要工作:
@@ -577,6 +578,14 @@
 - 验收标准:
   1. 三类 agent 输入不再依赖原始新闻列表。
   2. 输出格式稳定可被 orchestrator 消费。
+- 当前实现说明:
+  1. `src/services/report_models.py` 已新增并承接 `DailyReport`、`GlobalEvent`、`InvestmentTrend`、`IntelligenceItem`、`IntelSource`、`AgentInsights`，同时补充 `MacroAnalystOutput` 与 `SentimentAnalystOutput` 两个 v2 agent 输出模型。
+  2. `src/services/prompts.py` 已新增 `MACRO_ANALYST_PROMPT_V2`、`SENTIMENT_ANALYST_PROMPT_V2`、`MARKET_STRATEGIST_PROMPT_V2`，明确要求模型只消费 `event briefs / theme briefs / market context`，并新增 `build_macro_analyst_input()`、`build_sentiment_analyst_input()`、`build_market_strategist_input()` 三个输入拼装 helper。
+  3. `src/services/ai_service.py` 已改为从 `report_models.py` 导入报告模型，但继续在模块顶层暴露这些符号，因此现有 `from src.services.ai_service import DailyReport` 等调用保持兼容。
+  4. 本票只完成 Prompt v2 与 schema 契约，不切换 `generate_daily_report()` 主流程；真正把 event-centric context 接进报告生成链路，留到 `EIL-502`。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_report_models.py tests/test_prompts.py tests/test_ai_service.py tests/test_notifier.py` 通过（14 passed）。
+  2. `.venv/bin/pytest tests/test_report_models.py tests/test_prompts.py tests/test_ai_service.py tests/test_notifier.py tests/test_report_context_builder.py` 通过（19 passed）。
 
 ### [ ] EIL-502: `ai_service` 拆分为 report orchestrator
 
