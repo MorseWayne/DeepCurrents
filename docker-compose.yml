@@ -47,14 +47,19 @@ services:
     restart: unless-stopped
     ports:
       - "1200:1200"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       NODE_ENV: production
       CACHE_TYPE: redis
       REDIS_URL: redis://redis:6379/
       TWITTER_AUTH_TOKEN: ${TWITTER_AUTH_TOKEN:-}
-      PROXY: ${HTTPS_PROXY:-}
-      HTTP_PROXY: ${HTTPS_PROXY:-}
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      PROXY: ${DOCKER_HTTPS_PROXY:-}
+      HTTP_PROXY: ${DOCKER_HTTPS_PROXY:-}
+      HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-}
+      ALL_PROXY: ${DOCKER_HTTPS_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,host.docker.internal,redis
+      no_proxy: localhost,127.0.0.1,host.docker.internal,redis
       NODE_USE_ENV_PROXY: "1"
     depends_on:
       redis:
@@ -75,9 +80,16 @@ services:
       EVENT_INTELLIGENCE_QDRANT_URL: http://qdrant:6333
       EVENT_INTELLIGENCE_REDIS_URL: redis://redis:6379/0
       RSSHUB_BASE_URL: http://rsshub:1200
+      HTTPS_PROXY: ${DOCKER_HTTPS_PROXY:-}
+      HTTP_PROXY: ${DOCKER_HTTPS_PROXY:-}
+      ALL_PROXY: ${DOCKER_HTTPS_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,host.docker.internal,postgres,qdrant,redis,rsshub
+      no_proxy: localhost,127.0.0.1,host.docker.internal,postgres,qdrant,redis,rsshub
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

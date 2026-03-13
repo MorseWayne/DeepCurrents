@@ -13,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.config.sources import SOURCES, Source
 from src.config.settings import CONFIG
 from src.utils.logger import get_logger
+from src.utils.network import resolve_request_proxy
 from src.services.notifier import Notifier
 from src.services.report_models import (
     DailyReport,
@@ -63,7 +64,7 @@ class TestSuite:
             url = url.replace("https://rsshub.app", CONFIG.rsshub_base_url.rstrip("/"))
         
         type_label = "[RSSHub]" if source.is_rss_hub else "[RSS]"
-        proxy = CONFIG.https_proxy if CONFIG.https_proxy else None
+        proxy = resolve_request_proxy(url, CONFIG.https_proxy)
 
         for attempt in range(self.rss_max_retries + 1):
             try:

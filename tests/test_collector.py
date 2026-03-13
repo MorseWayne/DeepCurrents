@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.config.sources import Source
+from src.config.settings import CONFIG
 from src.services.article_models import ArticleRecord
 from src.services.collector import RSSCollector
 
@@ -101,6 +102,17 @@ def mock_rss_response(mock_get, content: str = RSS_ITEM):
     mock_get.return_value.__aenter__.return_value = mock_response
 
 
+def configure_event_intelligence(collector: RSSCollector) -> None:
+    collector.configure_event_intelligence(
+        article_normalizer=StubNormalizer(),
+        article_repository=StubRepository(),
+        article_feature_extractor=StubFeatureExtractor(),
+        semantic_deduper=StubSemanticDeduper(),
+        event_candidate_extractor=StubEventCandidateExtractor(),
+        event_enrichment=StubEventEnrichment(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_collect_all_skips_when_event_intelligence_unavailable(source):
     collector = RSSCollector()
@@ -112,6 +124,41 @@ async def test_collect_all_skips_when_event_intelligence_unavailable(source):
     assert stats["sources_skipped"] == 1
     assert stats["skipped"] == 1
     assert stats["articles_inserted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_uses_proxy_for_external_feed(source):
+    collector = RSSCollector()
+    configure_event_intelligence(collector)
+
+    with patch.object(CONFIG, "https_proxy", "http://proxy.internal:7890"):
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_rss_response(mock_get)
+            await collector.fetch_source(source)
+
+    assert mock_get.call_args.kwargs["proxy"] == "http://proxy.internal:7890"
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_bypasses_proxy_for_internal_rsshub_feed():
+    collector = RSSCollector()
+    configure_event_intelligence(collector)
+    rsshub_source = Source(
+        name="RSSHub Source",
+        url="https://rsshub.app/telegram/channel/example",
+        category="Test",
+        tier=3,
+        type="wire",
+        is_rss_hub=True,
+    )
+
+    with patch.object(CONFIG, "https_proxy", "http://proxy.internal:7890"):
+        with patch.object(CONFIG, "rsshub_base_url", "http://rsshub:1200"):
+            with patch("aiohttp.ClientSession.get") as mock_get:
+                mock_rss_response(mock_get)
+                await collector.fetch_source(rsshub_source)
+
+    assert mock_get.call_args.kwargs["proxy"] is None
 
 
 @pytest.mark.asyncio

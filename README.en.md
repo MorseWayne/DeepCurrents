@@ -136,6 +136,8 @@ EVENT_INTELLIGENCE_POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/de
 EVENT_INTELLIGENCE_QDRANT_URL=http://localhost:6333
 EVENT_INTELLIGENCE_REDIS_URL=redis://localhost:6379/0
 RSSHUB_BASE_URL=http://localhost:1200
+# Optional host-run proxy example
+# HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
 ### Mode B: Full Stack via Compose
@@ -159,6 +161,19 @@ In full-stack compose mode, the `deep-currents` container automatically override
 - `http://qdrant:6333`
 - `redis://redis:6379/0`
 - `http://rsshub:1200`
+- If containers need outbound proxy access, use `DOCKER_HTTPS_PROXY` instead of reusing host `127.0.0.1`
+
+Compose proxy example:
+
+```env
+DOCKER_HTTPS_PROXY=http://host.docker.internal:7890
+```
+
+Notes:
+
+- `docker-compose.yml` now injects `host.docker.internal:host-gateway` into both `rsshub` and `deep-currents`
+- On Linux you can also replace `host.docker.internal` with the host LAN IP
+- The collector automatically bypasses proxying for `rsshub`, `localhost`, and private-network targets so container-to-container traffic stays direct
 
 ### Important Runtime Behavior
 
@@ -271,11 +286,13 @@ uv run python -m src.test_tools --all
 
 Telegram (Bot API and RSS sources) might be restricted in some regions. Please note:
 
-1.  **Notification Proxy**: This system has integrated `HTTPS_PROXY` support. If Telegram delivery fails, configure your proxy address (HTTP/HTTPS/SOCKS5 supported) in `.env`.
-2.  **RSSHub Tuning**: 
+1.  **Host-run Proxy**: When running `uv run -m src.main` or `src.test_tools` on the host, use `HTTPS_PROXY`, for example `HTTPS_PROXY=http://127.0.0.1:7890`.
+2.  **Compose Proxy**: When running the full stack via `docker compose`, use `DOCKER_HTTPS_PROXY`, for example `DOCKER_HTTPS_PROXY=http://host.docker.internal:7890`.
+3.  **RSSHub Tuning**: 
     - The public instance `rsshub.app` has strict rate limits for Telegram/Twitter and often returns 403.
     - **Self-Hosting Recommended**: Start the local infra stack via `docker compose up -d postgres qdrant redis rsshub` and make sure at least `rsshub + redis` are healthy.
     - **Configuration**: Set `RSSHUB_BASE_URL=http://localhost:1200` in `.env` to enable automatic URL rewriting.
+4.  **Address Semantics**: Inside a container, `127.0.0.1` points to the container itself, not the host. Do not reuse a host-loopback proxy value for compose containers.
 
 ---
 

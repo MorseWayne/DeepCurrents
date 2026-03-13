@@ -2,6 +2,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 from typing import Optional, Dict
 from ..utils.logger import get_logger
+from ..utils.network import resolve_request_proxy
 
 logger = get_logger("extractor")
 
@@ -17,7 +18,10 @@ class Extractor:
         try:
             managed_session = session is None
             active_session = session or aiohttp.ClientSession()
-            async with active_session.get(url, timeout=15, proxy=proxy) as response:
+            request_proxy = resolve_request_proxy(url, proxy)
+            async with active_session.get(
+                url, timeout=15, proxy=request_proxy
+            ) as response:
                 if response.status != 200:
                     return None
                 html = await response.text()

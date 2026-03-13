@@ -144,6 +144,8 @@ DeepCurrents 从多源 RSS / RSSHub 信息流中抓取文章，执行 article-fi
 
 - `EVENT_INTELLIGENCE_ENABLED=true` 时，必须配置 PostgreSQL、Qdrant、Redis 连接。
 - 未启用 runtime 时，采集和报告不会回退到旧文章级路径。
+- 宿主机直接运行时使用 `HTTPS_PROXY`；compose 容器出网代理单独使用 `DOCKER_HTTPS_PROXY`。
+- 采集器会让 `rsshub`、`localhost`、私有网段等本地目标绕过代理，避免容器内访问本地 RSSHub 时被错误转发。
 
 ---
 
@@ -193,6 +195,12 @@ uv run -m src.run_report --json
 docker compose up -d --build
 docker compose logs -f deep-currents
 ```
+
+代理说明:
+
+- 宿主机模式代理: `HTTPS_PROXY=http://127.0.0.1:7890`
+- compose 容器代理: `DOCKER_HTTPS_PROXY=http://host.docker.internal:7890`
+- `docker-compose.yml` 已为 `rsshub` 和 `deep-currents` 注入 `host.docker.internal:host-gateway`
 
 ### 5.4 运行前提
 

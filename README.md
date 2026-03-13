@@ -172,6 +172,8 @@ EVENT_INTELLIGENCE_POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/de
 EVENT_INTELLIGENCE_QDRANT_URL=http://localhost:6333
 EVENT_INTELLIGENCE_REDIS_URL=redis://localhost:6379/0
 RSSHUB_BASE_URL=http://localhost:1200
+# 如需代理，宿主机模式继续使用本机回环地址
+# HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
 ### 方式 B：Compose 全栈模式
@@ -198,11 +200,24 @@ Compose 全栈模式下：
 
 - `deep-currents` 容器会自动使用容器内地址
 - `.env` 中可以继续保留 `localhost` 版本的宿主机地址
+- 如需给容器代理出网，使用 `DOCKER_HTTPS_PROXY`，不要把 `127.0.0.1` 直接传进容器
 - compose 会覆盖为：
   - `postgresql://postgres:postgres@postgres:5432/deepcurrents`
   - `http://qdrant:6333`
   - `redis://redis:6379/0`
   - `http://rsshub:1200`
+
+Compose 代理示例：
+
+```env
+DOCKER_HTTPS_PROXY=http://host.docker.internal:7890
+```
+
+说明：
+
+- `docker-compose.yml` 已为 `rsshub` 和 `deep-currents` 注入 `host.docker.internal:host-gateway`
+- 在 Linux 上也可直接用宿主机局域网 IP 代替 `host.docker.internal`
+- 采集器会自动让 `rsshub` / `localhost` / 私有网段地址绕过代理，避免容器内访问本地 RSSHub 时被错误送进代理
 
 ### 启动前必须知道的事
 
@@ -366,11 +381,13 @@ uv run python -m src.test_tools --all
 
 由于 Telegram (Bot API 及 RSS 源) 在部分地区访问受限，请务必注意：
 
-1.  **推送代理**: 本系统已集成 `HTTPS_PROXY` 支持。如果 Telegram 推送失败，请在 `.env` 中配置代理地址（支持 HTTP/HTTPS/SOCKS5）。
-2.  **RSSHub 调优**: 
+1.  **宿主机代理**: 宿主机直接运行 `uv run -m src.main` 或 `src.test_tools` 时，使用 `HTTPS_PROXY`。例如：`HTTPS_PROXY=http://127.0.0.1:7890`
+2.  **容器代理**: `docker compose` 全栈模式下，使用 `DOCKER_HTTPS_PROXY`。例如：`DOCKER_HTTPS_PROXY=http://host.docker.internal:7890`
+3.  **RSSHub 调优**: 
     - 公共实例 `rsshub.app` 对 Telegram/Twitter 抓取限制极严，经常返回 403。
     - **强烈建议自建**: 使用 `docker compose up -d postgres qdrant redis rsshub` 启动完整本地基础设施，至少保证 `rsshub + redis` 可用。
     - **配置指向**: 在 `.env` 中设置 `RSSHUB_BASE_URL=http://localhost:1200`，系统将自动完成 URL 替换。
+4.  **地址语义**: `127.0.0.1` 在容器里指向容器自己，不是宿主机；因此不要把宿主机回环代理直接复用给 compose 容器。
 
 ---
 
@@ -384,7 +401,8 @@ uv run python -m src.test_tools --all
 | `EVENT_INTELLIGENCE_POSTGRES_DSN` | `postgresql://postgres:postgres@localhost:5432/deepcurrents` | 宿主机模式下的 PostgreSQL 地址 |
 | `EVENT_INTELLIGENCE_QDRANT_URL` | `http://localhost:6333` | 宿主机模式下的 Qdrant 地址 |
 | `EVENT_INTELLIGENCE_REDIS_URL` | `redis://localhost:6379/0` | 宿主机模式下的 Redis 地址 |
-| `HTTPS_PROXY` | `""` | 全局代理地址 (支持 http:// 或 socks5://) |
+| `HTTPS_PROXY` | `""` | 宿主机运行 app / test_tools 时使用的代理地址 |
+| `DOCKER_HTTPS_PROXY` | `""` | `docker compose` 容器使用的代理地址，推荐 `http://host.docker.internal:7890` |
 | `RSSHUB_BASE_URL` | `http://localhost:1200` | 自建 RSSHub 地址 |
 | `AI_MAX_CONTEXT_TOKENS` | `128000` | AI 上下文 Token 预算 |
 | `DEDUP_SIMILARITY_THRESHOLD` | `0.55` | 标题去重相似度阈值 |

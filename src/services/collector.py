@@ -9,6 +9,7 @@ from .article_models import ArticleRecord
 from .metrics import default_ingestion_metrics, safe_ratio
 from ..utils.extractor import Extractor
 from ..utils.logger import get_logger
+from ..utils.network import resolve_request_proxy
 
 logger = get_logger("collector")
 
@@ -171,7 +172,7 @@ class RSSCollector:
             source_metrics = self._empty_source_metrics()
             try:
                 url = resolve_source_url(source)
-                proxy = CONFIG.https_proxy if CONFIG.https_proxy else None
+                proxy = resolve_request_proxy(url, CONFIG.https_proxy)
                 content = None
 
                 for attempt in range(self.max_retries + 1):
@@ -238,8 +239,9 @@ class RSSCollector:
 
                     # 高优源尝试全文提取
                     if source.tier <= 2:
+                        extract_proxy = resolve_request_proxy(link, CONFIG.https_proxy)
                         extracted = await Extractor.extract(
-                            link, session=active_session, proxy=proxy
+                            link, session=active_session, proxy=extract_proxy
                         )
                         extracted_content = (
                             extracted.get("content", "") if extracted else ""
