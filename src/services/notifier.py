@@ -71,6 +71,8 @@ class Notifier:
 
     async def send_to_feishu(self, report: DailyReport, news_count: int, cluster_count: int):
         md = f"**🌊 核心主线 | Executive Summary**\n{report.executiveSummary}\n\n"
+        if report.equityMarketSummary:
+            md += f"**📊 全球大盘综述 | Equity Overview**\n{report.equityMarketSummary}\n\n"
         macro_chain = self._report_mapping(getattr(report, "macroTransmissionChain", None))
         asset_breakdowns = self._report_mapping_list(
             getattr(report, "assetTransmissionBreakdowns", None)

@@ -111,7 +111,7 @@ async def search_market_symbol(query: str) -> Optional[str]:
 ENERGY_SYMBOLS = {"CL=F", "BZ=F", "NG=F", "RB=F", "HO=F"}
 PRECIOUS_METAL_SYMBOLS = {"GC=F", "SI=F", "PL=F", "PA=F"}
 USD_SYMBOLS = {"DX-Y.NYB", "DXY", "UUP"}
-EQUITY_SYMBOLS = {"^GSPC", "^IXIC", "^DJI", "SPY", "QQQ"}
+EQUITY_SYMBOLS = {"^GSPC", "^IXIC", "^DJI", "SPY", "QQQ", "^STOXX50E", "^N225", "^HSI", "000300.SS"}
 RATES_SYMBOLS = {"^TNX", "^IRX", "ZT=F", "ZF=F", "ZN=F", "ZB=F"}
 
 

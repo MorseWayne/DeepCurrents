@@ -94,6 +94,7 @@ class DailyReport(BaseModel):
     date: str
     intelligenceDigest: List[IntelligenceItem]
     executiveSummary: str
+    equityMarketSummary: Optional[str] = None
     macroTransmissionChain: Optional[MacroTransmissionChain] = None
     globalEvents: List[GlobalEvent]
     economicAnalysis: str
