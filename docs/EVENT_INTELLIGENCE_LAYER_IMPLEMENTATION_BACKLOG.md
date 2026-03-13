@@ -31,10 +31,11 @@
   16. `EIL-302`：已新增 `src/services/scoring_profiles.py`，将 `macro_daily / risk_daily / strategy_am` 三套 scoring profile 从 `event_ranker` 中抽离，并把 explainability 收敛为 `profile / dimension_scores / weighted_contributions / top_drivers / risk_flags / event_facts` 的稳定结构；同时补齐 `tests/test_event_ranker.py`，验证不同 profile 下排序差异可复现、解释结构完整、未知 profile 明确报错。
   17. `EIL-303`：已新增 `src/services/evidence_selector.py`，完成文章级 evidence package 选择器，按高 Tier、独立信源、数字/政策信号和覆盖多样性为事件压缩 supporting / contradicting 证据，并在有冲突叙事时保留反方证据位；同时补齐 `tests/test_evidence_selector.py`，验证去冗余、冲突保留和按排序结果批量生成证据包的契约。
   18. `EIL-601`：已新增 `src/services/metrics.py`，建立 ingestion / ranking / evidence / report 四阶段指标汇总与结构化日志 helper，并在 `collector`、`event_ranker`、`evidence_selector`、`ai_service`、`engine` 接入运行时指标输出；同时补齐 `tests/test_metrics.py` 及相关服务测试，固定压缩率、单源比例、冲突保留率和 report budget 指标契约。
+  19. `EIL-401`：已新增 `src/services/event_summarizer.py`，完成规则版 `event_brief` 生成与持久化，把 `event_query_service + evidence_selector + event_ranker` 的结构化输出收敛为稳定事件卡 schema，并写入 `event_briefs`；同时补齐 `tests/test_event_summarizer.py`，验证字段结构、冲突保留和 ranked briefs 顺序契约。
 - 下一步:
-  1. `EIL-401`：开始构建 `event_brief` 生成链路，把排序、证据包和结构化 metrics 输出转成可复用的摘要单元。
-  2. `EIL-402`：在 `event_brief` 稳定后推进 `theme_brief` 聚合层，减少上层 AI 直接读事件卡的负担。
-  3. `EIL-403`：补齐 `report_context_builder`，把 event/theme brief 压成最终 report 输入层。
+  1. `EIL-402`：在 `event_brief` 稳定后推进 `theme_brief` 聚合层，减少上层 AI 直接读事件卡的负担。
+  2. `EIL-403`：补齐 `report_context_builder`，把 event/theme brief 压成最终 report 输入层。
+  3. `EIL-404`：定义 market context 配额和上下文预算裁剪策略，让 brief 层能稳定进入多智能体报告栈。
 
 ---
 
@@ -463,7 +464,7 @@
 
 ## 8. Batch 4 - Briefs and Context
 
-### [ ] EIL-401: `event_summarizer` 生成 `event_brief`
+### [x] EIL-401: `event_summarizer` 生成 `event_brief`
 
 - 主要模块: `src/services/event_summarizer.py`
 - 主要工作:
@@ -477,6 +478,14 @@
 - 验收标准:
   1. 每个高价值事件可生成格式稳定的事件卡。
   2. 事件卡能独立支撑后续 AI 输入。
+- 当前实现说明:
+  1. `src/services/event_summarizer.py` 已新增 `EventSummarizer`，提供 `summarize_event()` 与 `summarize_ranked_events()` 两个 service 入口，分别用于单事件和批量 ranked 事件卡生成。
+  2. 当前实现采用规则/模板版 `event_brief`，不接入 LLM；生成字段固定为 `eventId / canonicalTitle / stateChange / coreFacts / whyItMatters / marketChannels / regions / assets / confidence / novelty / corroboration / evidenceRefs / contradictions`，并补充 `profile / eventType / status / totalScore / lastTransition / generatedAt` 供后续层复用。
+  3. 事件卡会复用 `event_query_service` 时间线、`evidence_selector` 证据包和 `event_ranker` 的 explainability 输出，将 supporting / contradicting evidence 压成摘要友好的 `coreFacts`、`whyItMatters` 和 `contradictions`。
+  4. 生成结果通过 `BriefRepository.upsert_event_brief()` 持久化到 `event_briefs`，并输出 `brief` 阶段结构化日志，保存最近一次 `last_brief_metrics` 供测试和调试使用。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_event_summarizer.py` 通过（3 passed）。
+  2. `.venv/bin/pytest tests/test_event_summarizer.py tests/test_evidence_selector.py tests/test_event_ranker.py tests/test_event_query_service.py tests/test_event_intelligence_repositories.py` 通过（24 passed）。
 
 ### [ ] EIL-402: `theme_summarizer` 生成 `theme_brief`
 
