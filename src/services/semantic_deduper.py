@@ -6,9 +6,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, Protocol, Sequence
 
 from ..config.settings import CONFIG
+from ..utils.text_similarity import (
+    dice_coefficient,
+    generate_trigrams,
+    jaccard_similarity,
+)
 from ..utils.tokenizer import tokenize
 from .article_models import ArticleRecord
-from .db_service import dice_coefficient, generate_trigrams, jaccard_similarity
 
 
 class ArticleRepositoryLike(Protocol):

@@ -14,7 +14,13 @@ from src.config.sources import SOURCES, Source
 from src.config.settings import CONFIG
 from src.utils.logger import get_logger
 from src.services.notifier import Notifier
-from src.services.ai_service import AIService, DailyReport, IntelligenceItem, GlobalEvent, InvestmentTrend, IntelSource
+from src.services.report_models import (
+    DailyReport,
+    GlobalEvent,
+    IntelligenceItem,
+    IntelSource,
+    InvestmentTrend,
+)
 from src.utils.market_data import get_market_price
 
 logger = get_logger("test_tools")
@@ -24,7 +30,6 @@ class TestSuite:
 
     def __init__(self):
         self.notifier = Notifier()
-        self.ai_service = AIService()
         self.rss_retry_statuses = {429, 500, 502, 503, 504}
         self.rss_max_retries = 2
         self.rss_retry_base_delay = 0.8

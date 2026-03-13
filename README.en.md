@@ -6,17 +6,18 @@
 
 English | [**中文**](./README.md)
 
-DeepCurrents is an automated intelligence system that aggregates **35+ top-tier global news sources** (Reuters, Bloomberg, AP, BBC, CNBC, and more), classifies threats, clusters related events, detects trending signals — and synthesizes everything into **structured daily macro strategy reports** using Multi-Agent LLM reasoning.
+DeepCurrents is an automated intelligence system that aggregates **70+ global sources**, runs an **article-first ingestion -> dedup -> event building -> ranking -> event-centric report orchestration** pipeline, and synthesizes the resulting event cards into **structured daily macro strategy reports** using Multi-Agent LLM reasoning.
 
 ---
 
 ## ✨ Highlights
 
 - **Multi-Agent Orchestration**: Parallel reasoning by **Macro Analyst** (geopolitical/macro focus) and **Sentiment Analyst** (market tone), synthesized by a **Market Strategist** (CIO-level synthesis).
-- **35+ curated sources** with 4-tier credibility scoring (T1–T4).
+- **70+ curated sources** with 4-tier credibility scoring (T1–T4).
 - **Real-time Market Ingestion**: Integrates `yfinance` to fetch live prices for Gold, Crude Oil, S&P 500, etc., for "Expectation Gap" analysis.
 - **Prediction Feedback Loop**: Automatically records AI outlooks and triggers backtested scoring (0-100) after 24h based on actual price movements.
 - **Async High Performance**: 100% Python 3.10+ architecture based on `asyncio` and `aiohttp` for massive parallel collection.
+- **Article-First Compression**: Exact / near / semantic dedup plus event building compress noisy article streams into reportable events.
 - **Multi-channel Delivery**: Rich-card notifications to Feishu (Lark) and Telegram Markdown.
 
 ---
@@ -28,6 +29,10 @@ DeepCurrents is an automated intelligence system that aggregates **35+ top-tier 
 - **Python** >= 3.10
 - **uv** (Recommended) or pip
 - An AI API key compatible with the OpenAI interface
+- Event Intelligence runtime dependencies:
+  - PostgreSQL
+  - Qdrant
+  - Redis
 
 ### 1. Clone
 
@@ -53,8 +58,20 @@ Copy `.env.example` to `.env` and fill in your configuration:
 
 ```bash
 cp .env.example .env
-# Edit .env and fill in AI_API_KEY, etc.
+# Edit .env and fill in AI + Event Intelligence runtime settings
 ```
+
+Minimum runtime settings:
+
+```env
+AI_API_KEY=your_openai_api_key
+EVENT_INTELLIGENCE_ENABLED=true
+EVENT_INTELLIGENCE_POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/deepcurrents
+EVENT_INTELLIGENCE_QDRANT_URL=http://localhost:6333
+EVENT_INTELLIGENCE_REDIS_URL=redis://localhost:6379/0
+```
+
+If `EVENT_INTELLIGENCE_ENABLED=false`, collection and report entrypoints stay fail-closed and do not fall back to the old article-level pipeline.
 
 ### 4. Run
 
@@ -82,30 +99,35 @@ uv run pytest
 ┌──────────────────────────────────────────────────────┐
 │              DeepCurrents Engine v2.2 (Python)       │
 │                                                      │
-│  ┌──────────┐  ┌───────────┐  ┌──────────────────┐  │
-│  │Collector │─▶│ Circuit   │─▶│ SQLite + Fuzzy   │  │
-│  │(aiohttp) │  │ Breaker   │  │ Deduplication    │  │
-│  └──────────┘  └───────────┘  └────────┬─────────┘  │
-│                                        │             │
-│  ┌──────────┐  ┌───────────┐           │             │
-│  │Classifier│  │ Clustering│◀──────────┤             │
-│  │ (threat) │  │ (Union-Fn)│           │             │
-│  └──────────┘  └─────┬─────┘           │             │
-│  ┌──────────┐        │          ┌──────┴──────┐      │
-│  │ yfinance │────────┴─────────▶│ Multi-Agent │      │
-│  │ (market) │                   │ Pipeline    │      │
-│  └─────┬────┘                   └──────┬──────┘      │
-│        │                               │             │
-│        │          ┌──────────┐      Structured       │
-│        └─────────▶│ Scorer   │◀────────┴──────────┐  │
-│                   │ (Backtest)│                   │  │
-│                   └──────────┘             ┌─────▼─────┐
-│                                            │  Notifier │
-│                                            └─────┬─────┘
-│                                                  │
-│                                        ┌─────────┴─────────┐
-│                                        ▼                   ▼
-│                                     Feishu              Telegram
+│  ┌──────────┐  ┌───────────┐  ┌──────────────────────┐   │
+│  │Collector │─▶│ Circuit   │─▶│ Article Repository   │   │
+│  │(aiohttp) │  │ Breaker   │  │ + Feature Extractor  │   │
+│  └──────────┘  └───────────┘  └──────────┬───────────┘   │
+│                                          │               │
+│                           ┌──────────────▼─────────────┐ │
+│                           │ Semantic Dedup + Event     │ │
+│                           │ Builder + Enrichment       │ │
+│                           └──────────────┬─────────────┘ │
+│                                          │               │
+│  ┌──────────┐               ┌────────────▼────────────┐  │
+│  │ yfinance │──────────────▶│ Ranking / Evidence /    │  │
+│  │ (market) │               │ Briefs / Report Context │  │
+│  └─────┬────┘               └────────────┬────────────┘  │
+│        │                                  │              │
+│        │          ┌──────────┐    ┌──────▼──────┐       │
+│        └─────────▶│ Scorer   │◀──▶│ Multi-Agent │       │
+│                   │ (Backtest)│    │ Orchestrator│       │
+│                   └──────────┘    └──────┬──────┘       │
+│                                           │              │
+│                                     Structured Report    │
+│                                           ▼              │
+│                                      ┌────┴────┐         │
+│                                      │Notifier │         │
+│                                      └────┬────┘         │
+│                                           │              │
+│                                 ┌─────────┴─────────┐    │
+│                                 ▼                   ▼    │
+│                              Feishu              Telegram
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -115,10 +137,9 @@ uv run pytest
 
 | Task | Default Cron | Module | Description |
 | :--- | :--- | :--- | :--- |
-| **Collection** | `0 * * * *` | `collector` | Hourly scan all RSS sources, dedup and store |
-| **Report** | `0 8 * * *` | `engine` | Daily synthesis and delivery |
+| **Collection** | `0 * * * *` | `collector` | Hourly article-first ingestion, feature extraction, dedup, and event updates |
+| **Report** | `0 8 * * *` | `engine` | Daily event-centric synthesis and delivery |
 | **Scoring** | Every 4h | `scorer` | Backtest past AI predictions against real prices |
-| **Cleanup** | `0 3 * * *` | `db_service` | Purge expired data (default 30 days) |
 
 ---
 
@@ -129,7 +150,7 @@ Use `pytest` to verify component connectivity and logical consistency:
 ```bash
 uv run pytest                     # Run all tests
 uv run pytest tests/test_collector.py   # Test collector only
-uv run pytest tests/test_ai_service.py  # Test AI service only
+uv run pytest tests/test_report_orchestrator.py  # Test event-centric report orchestration
 uv run pytest tests/test_scorer.py      # Test scoring system only
 ```
 

@@ -52,7 +52,6 @@ def default_ingestion_metrics(*, sources_total: int = 0) -> dict[str, Any]:
         "sources_failed": 0,
         "articles_seen": 0,
         "articles_inserted": 0,
-        "legacy_mirrored": 0,
         "duplicate_refreshes": 0,
         "feature_failures": 0,
         "cheap_dedup_links": 0,

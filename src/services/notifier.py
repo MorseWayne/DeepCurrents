@@ -4,8 +4,8 @@ import asyncio
 from html import escape
 from typing import Dict, Any, List
 from ..config.settings import CONFIG
-from .ai_service import DailyReport
-from .classifier import THREAT_LABELS
+from .report_models import DailyReport
+from .threat_labels import THREAT_LABELS
 from ..utils.logger import get_logger
 
 logger = get_logger("notifier")

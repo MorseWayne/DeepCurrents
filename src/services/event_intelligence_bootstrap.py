@@ -59,7 +59,9 @@ class EventIntelligenceBootstrap:
 
         if not self.settings.event_intelligence_enabled:
             self.state = EventIntelligenceRuntimeState(enabled=False)
-            logger.info("Event Intelligence runtime 未启用，继续使用当前主链路。")
+            logger.info(
+                "Event Intelligence runtime 未启用，采集与报告入口将保持 fail-closed。"
+            )
             return self.state
 
         self.settings.validate_event_intelligence_settings()

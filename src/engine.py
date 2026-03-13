@@ -2,9 +2,9 @@ import asyncio
 from datetime import UTC, date, datetime, time
 from typing import TYPE_CHECKING, Any, cast
 from .config.settings import CONFIG
-from .services.db_service import DBService
 from .services.collector import RSSCollector
 from .services.ai_service import AIService
+from .services.prediction_repository import PredictionRepository
 from .services.scorer import PredictionScorer
 from .services.notifier import Notifier
 from .services.event_intelligence_bootstrap import (
@@ -32,10 +32,10 @@ REPORT_EVENT_STATUSES = (
 
 class DeepCurrentsEngine:
     def __init__(self):
-        self.db = DBService()
-        self.collector = RSSCollector(self.db)
-        self.ai = AIService(self.db)
-        self.scorer = PredictionScorer(self.db)
+        self.prediction_repository = PredictionRepository()
+        self.collector = RSSCollector()
+        self.ai = AIService(self.prediction_repository)
+        self.scorer = PredictionScorer(self.prediction_repository)
         self.notifier = Notifier()
         self.event_intelligence = EventIntelligenceBootstrap(CONFIG)
         self._report_repository: Any = None
@@ -49,7 +49,7 @@ class DeepCurrentsEngine:
         if self._runtime_ready:
             return
 
-        await self.db.connect()
+        await self.prediction_repository.connect()
         runtime_state = await self.event_intelligence.start()
         self._configure_event_intelligence_ingestion(runtime_state)
         self._configure_event_intelligence_reporting(runtime_state)
@@ -381,19 +381,10 @@ class DeepCurrentsEngine:
             return datetime.combine(report_date, time.min, tzinfo=UTC)
         return None
 
-    async def cleanup(self):
-        """清理过期数据"""
-        try:
-            count = await self.db.cleanup()
-            if count > 0:
-                logger.info(f"清理了 {count} 条过期数据")
-        except Exception as e:
-            logger.error(f"清理任务失败: {e}")
-
     async def stop(self):
         if self._runtime_ready:
             await self.event_intelligence.stop()
-        await self.db.close()
+        await self.prediction_repository.close()
         self._clear_event_intelligence_reporting()
         self._runtime_ready = False
         logger.info("引擎已关闭")

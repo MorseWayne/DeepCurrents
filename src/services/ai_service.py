@@ -3,14 +3,11 @@ import json
 import re
 import time
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional, Literal, Tuple
+from typing import Dict, Any, Optional, Literal, Tuple, List
 from openai import AsyncOpenAI
 from ..config.settings import CONFIG
 from ..config.asset_symbols import resolve_asset_symbol, get_default_market_symbols
-from .db_service import DBService, NewsRecord
-from .clustering import ClusteredEvent, generate_cluster_context
-from .classifier import THREAT_LABELS
-from .metrics import build_report_metrics
+from .prediction_repository import PredictionRepository
 from .report_models import (
     AgentInsights,
     DailyReport,
@@ -21,7 +18,6 @@ from .report_models import (
 )
 from ..utils.market_data import get_market_price, search_market_symbol
 from ..utils.logger import get_logger
-from .prompts import MACRO_ANALYST_PROMPT, SENTIMENT_ANALYST_PROMPT, MARKET_STRATEGIST_PROMPT
 
 logger = get_logger("ai-service")
 
@@ -35,25 +31,6 @@ SAFETY_MARGIN = 4000
 PROMPT_OVERHEAD = 2000
 MIN_WORKING_INPUT = 2000
 WINDOW_CACHE_TTL_SEC = 900
-FINAL_STRATEGIST_PROMPT = """
-[RAW INTEL CONTEXT]
-{raw_context}
-
-[MACRO ANALYST OUTPUT]
-```json
-{macro_out}
-```
-
-[SENTIMENT ANALYST OUTPUT]
-```json
-{sentiment_out}
-```
-
-[MARKET DATA]
-{market_price_context}
-
-请根据以上背景，撰写最终机构级研报。
-"""
 MODEL_CONTEXT_WINDOW_FALLBACKS: Dict[str, int] = {
     "gpt-4o": 128000,
     "gpt-4o-mini": 128000,
@@ -118,8 +95,10 @@ def extract_json(raw: str) -> str:
     return trimmed
 
 class AIService:
-    def __init__(self, db: Optional[DBService] = None):
-        self.db = db or DBService()
+    def __init__(
+        self, prediction_repository: Optional[PredictionRepository] = None
+    ):
+        self.prediction_repository = prediction_repository or PredictionRepository()
         self.client = AsyncOpenAI(api_key=CONFIG.ai_api_key, base_url=CONFIG.ai_api_url.replace('/chat/completions', ''))
         self._asset_symbol_cache: Dict[str, Optional[str]] = {}
         self._window_cache: Dict[str, Dict[str, Any]] = {}
@@ -533,179 +512,6 @@ class AIService:
             "usable_input": usable_input,
         }
 
-    def _compose_raw_context(self, news_context: str, cluster_context: str) -> str:
-        return "\n".join([p for p in [news_context, cluster_context] if p])
-
-    def _build_cluster_context(self, clusters: Optional[List[ClusteredEvent]], budget: int) -> Tuple[str, int]:
-        if not clusters or budget <= 0:
-            return "", 0
-        cluster_ctx = generate_cluster_context(clusters)
-        if not cluster_ctx:
-            return "", 0
-        trimmed = truncate_to_token_budget(cluster_ctx, budget)
-        return trimmed, estimate_tokens(trimmed)
-
-    def _build_final_strategist_input(
-        self,
-        raw_context: str,
-        macro_out: str,
-        sentiment_out: str,
-        market_price_context: str
-    ) -> str:
-        return FINAL_STRATEGIST_PROMPT.format(
-            raw_context=raw_context,
-            macro_out=macro_out,
-            sentiment_out=sentiment_out,
-            market_price_context=market_price_context,
-        )
-
-    def _guard_final_strategist_input(
-        self,
-        news_list: List[NewsRecord],
-        clusters: Optional[List[ClusteredEvent]],
-        macro_out: str,
-        sentiment_out: str,
-        market_price_context: str,
-        usable_budget: int,
-        news_context: str,
-        cluster_context: str,
-    ) -> Tuple[str, Dict[str, Any]]:
-        initial_input = self._build_final_strategist_input(
-            self._compose_raw_context(news_context, cluster_context),
-            macro_out,
-            sentiment_out,
-            market_price_context,
-        )
-        pre_tokens = estimate_tokens(initial_input)
-        news_tokens = estimate_tokens(news_context)
-        cluster_tokens = estimate_tokens(cluster_context) if cluster_context else 0
-        context_tokens = news_tokens + cluster_tokens
-        fixed_tokens = estimate_tokens(self._build_final_strategist_input("", macro_out, sentiment_out, market_price_context))
-        max_context_tokens = max(0, usable_budget - fixed_tokens)
-        trimmed_sections: List[str] = []
-
-        if context_tokens > max_context_tokens:
-            # 优先压缩新闻尾部（低优先级内容通常在后部）
-            target_news = max(0, max_context_tokens - cluster_tokens)
-            if target_news < news_tokens:
-                news_context, news_tokens = self.build_news_context(news_list, target_news)
-                trimmed_sections.append("news-low-priority")
-                context_tokens = news_tokens + cluster_tokens
-
-        if context_tokens > max_context_tokens and cluster_tokens > 0:
-            # 再压缩聚类上下文
-            target_cluster = max(0, max_context_tokens - news_tokens)
-            if target_cluster < cluster_tokens:
-                cluster_context, cluster_tokens = self._build_cluster_context(clusters, target_cluster)
-                trimmed_sections.append("cluster")
-                context_tokens = news_tokens + cluster_tokens
-
-        if context_tokens > max_context_tokens:
-            # 最后继续压缩新闻（可能影响高优先级内容）
-            target_news = max(0, max_context_tokens - cluster_tokens)
-            if target_news < news_tokens:
-                news_context, news_tokens = self.build_news_context(news_list, target_news)
-                trimmed_sections.append("news-high-priority")
-
-        guarded_raw_context = self._compose_raw_context(news_context, cluster_context)
-        final_input = self._build_final_strategist_input(guarded_raw_context, macro_out, sentiment_out, market_price_context)
-        post_tokens = estimate_tokens(final_input)
-
-        if post_tokens > usable_budget:
-            final_input = truncate_to_token_budget(final_input, usable_budget)
-            trimmed_sections.append("final-hard-cap")
-            post_tokens = estimate_tokens(final_input)
-
-        return final_input, {
-            "pre_guard_tokens": pre_tokens,
-            "post_guard_tokens": post_tokens,
-            "trimmed_sections": trimmed_sections,
-        }
-
-    async def generate_daily_report(
-        self,
-        news_list: List[NewsRecord],
-        clusters: List[ClusteredEvent] = None
-    ) -> DailyReport:
-        """多智能体研报生成流"""
-        self.last_report_guard_stats = {}
-        self.last_report_metrics = {}
-        shared_window, provider_windows = await self._resolve_shared_context_window()
-        budget = self._compute_input_budget(shared_window)
-        usable_input = budget["usable_input"]
-
-        has_cluster = bool(clusters)
-        news_alloc = int(usable_input * 0.65)
-        cluster_alloc = int(usable_input * 0.20) if has_cluster else 0
-
-        news_context, news_used = self.build_news_context(news_list, news_alloc)
-        cluster_context, cluster_used = self._build_cluster_context(clusters, cluster_alloc)
-
-        # 剩余预算回流：news > cluster
-        remaining = max(0, usable_input - (news_used + cluster_used))
-        if remaining > 0:
-            boosted_news_context, boosted_news_used = self.build_news_context(news_list, news_used + remaining)
-            gained_news = max(0, boosted_news_used - news_used)
-            news_context, news_used = boosted_news_context, boosted_news_used
-            remaining = max(0, remaining - gained_news)
-        if remaining > 0 and has_cluster:
-            boosted_cluster_context, boosted_cluster_used = self._build_cluster_context(clusters, cluster_used + remaining)
-            cluster_context, cluster_used = boosted_cluster_context, boosted_cluster_used
-
-        raw_context = self._compose_raw_context(news_context, cluster_context)
-        logger.info(
-            f"AI预算摘要: windows={provider_windows}, baseline={shared_window}, "
-            f"reserve={budget['output_reserve']}, safety={budget['safety_margin']}, usable={usable_input}"
-        )
-        logger.info(
-            f"上下文分配: news_alloc={news_alloc}/used={news_used}, "
-            f"cluster_alloc={cluster_alloc}/used={cluster_used}"
-        )
-
-        # ── 多智能体并行流程 ──
-        logger.info("启动多智能体并发推理...")
-        market_price_context = await self.build_market_price_context()
-
-        tasks = [
-            self.call_agent("MacroAnalyst", MACRO_ANALYST_PROMPT, raw_context),
-            self.call_agent("SentimentAnalyst", SENTIMENT_ANALYST_PROMPT, raw_context)
-        ]
-        
-        macro_out, sentiment_out = await asyncio.gather(*tasks)
-
-        # ── 首席战略官 (Market Strategist) 整合 ──
-        logger.info("启动首席战略官整合研报...")
-        final_strategist_input, guard_stats = self._guard_final_strategist_input(
-            news_list=news_list,
-            clusters=clusters,
-            macro_out=macro_out,
-            sentiment_out=sentiment_out,
-            market_price_context=market_price_context,
-            usable_budget=usable_input,
-            news_context=news_context,
-            cluster_context=cluster_context,
-        )
-        logger.info(
-            f"Strategist guard: pre={guard_stats['pre_guard_tokens']}, "
-            f"post={guard_stats['post_guard_tokens']}, trimmed={guard_stats['trimmed_sections']}"
-        )
-        final_raw = await self.call_agent("MarketStrategist", MARKET_STRATEGIST_PROMPT, final_strategist_input, use_json=True)
-        parsed_json = await self.parse_daily_report_json(final_raw)
-        report = DailyReport(**parsed_json)
-        self.last_report_guard_stats = dict(guard_stats)
-        self.last_report_metrics = build_report_metrics(
-            raw_news_input_count=len(news_list),
-            cluster_count=len(clusters or []),
-            report_generated=True,
-            investment_trend_count=len(report.investmentTrends),
-            guard_stats=guard_stats,
-        )
-        
-        # 写入预测闭环（失败不影响主流程）
-        await self._persist_predictions(report)
-
-        return report
-
     async def build_market_price_context(self) -> str:
         """构建实时市场上下文，失败时自动回退到占位文本。"""
         symbols = get_default_market_symbols(limit=CONFIG.ai_market_context_symbols_limit)
@@ -750,6 +556,7 @@ class AIService:
         saved = 0
         skipped = 0
         for trend in report.investmentTrends:
+            symbol = ""
             try:
                 symbol = await self.resolve_asset_symbol_auto(trend.assetClass)
                 if not symbol:
@@ -757,13 +564,15 @@ class AIService:
                     continue
 
                 market = await asyncio.wait_for(get_market_price(symbol), timeout=10)
-                await self.db.save_prediction({
-                    "asset": symbol,
-                    "type": trend.trend.lower(),
-                    "reasoning": trend.rationale,
-                    "price": market["price"],
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                })
+                await self.prediction_repository.save_prediction(
+                    {
+                        "asset": symbol,
+                        "type": trend.trend.lower(),
+                        "reasoning": trend.rationale,
+                        "price": market["price"],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 saved += 1
             except Exception as e:
                 skipped += 1
@@ -868,34 +677,3 @@ class AIService:
                 continue
         
         raise Exception(f"{name} 所有提供商调用均失败")
-
-    def build_news_context(self, news_list: List[NewsRecord], budget: int) -> Tuple[str, int]:
-        if budget <= 0:
-            return "", 0
-        lines = []
-        used = 0
-        for i, n in enumerate(news_list):
-            label = THREAT_LABELS.get(n.threatLevel, '')
-            header = f"[{i+1}] {label} {n.title} ({n.category}, T{n.tier})"
-            
-            entry = header
-            if n.content and len(n.content) > 80:
-                is_high_priority = (n.tier is not None and n.tier <= 2) or (n.threatLevel in {"critical", "high"})
-                excerpt_len = 360 if is_high_priority else 220
-                excerpt = re.sub(r'\s+', ' ', n.content[:excerpt_len]).strip()
-                entry += f"\n  ▸ {excerpt}"
-            
-            entry_tokens = estimate_tokens(entry)
-            if used + entry_tokens <= budget:
-                lines.append(entry)
-                used += entry_tokens
-                continue
-
-            header_tokens = estimate_tokens(header)
-            if used + header_tokens > budget:
-                break
-
-            # 预算不足时回退为仅标题，提升保留事件数量
-            lines.append(header)
-            used += header_tokens
-        return "\n".join(lines), used

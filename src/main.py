@@ -42,14 +42,6 @@ async def main():
     # 自动评分 (每4小时一次)
     scheduler.add_job(engine.scorer.run_scoring_task, 'interval', hours=4, id="score_predictions", replace_existing=True)
     
-    # 数据清理
-    scheduler.add_job(
-        engine.cleanup,
-        trigger=build_cron_trigger(CONFIG.cron_cleanup, "CRON_CLEANUP"),
-        id="cleanup_data",
-        replace_existing=True
-    )
-
     scheduler.start()
     logger.info("任务调度器已启动")
 

@@ -1,20 +1,20 @@
 import asyncio
 import time
 from datetime import datetime
-from ..services.db_service import DBService
+from ..services.prediction_repository import PredictionRepository
 from ..utils.market_data import get_market_price
 from ..utils.logger import get_logger
 
 logger = get_logger("scorer")
 
 class PredictionScorer:
-    def __init__(self, db: DBService = None):
-        self.db = db or DBService()
+    def __init__(self, prediction_repository: PredictionRepository | None = None):
+        self.prediction_repository = prediction_repository or PredictionRepository()
 
     async def run_scoring_task(self):
         """运行评分任务：处理所有待评分的预测记录"""
         logger.info("开始运行预测评分任务...")
-        pending = await self.db.get_pending_predictions()
+        pending = await self.prediction_repository.get_pending_predictions()
         
         if not pending:
             logger.info("没有待评分的预测记录。")
@@ -53,7 +53,9 @@ class PredictionScorer:
                     elif abs(change_percent) < 0.5: score = 60.0
                     else: score = 20.0
 
-                await self.db.update_prediction_score(p['id'], score, current_price)
+                await self.prediction_repository.update_prediction_score(
+                    p["id"], score, current_price
+                )
                 logger.info(f"✅ 预测已评分 [{p['id']}]: {p['asset_symbol']} 类型:{p_type} 基准:{base_price} 当前:{current_price} 变化:{change_percent:.2f}% 得分:{score}")
             
             except Exception as e:

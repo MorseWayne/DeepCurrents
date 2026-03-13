@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -84,15 +84,6 @@ class StubEventEnrichment:
 
 
 @pytest.fixture
-def mock_db():
-    db = MagicMock()
-    db.has_news = AsyncMock(return_value=False)
-    db.has_similar_title = AsyncMock(return_value=False)
-    db.save_news = AsyncMock(return_value=True)
-    return db
-
-
-@pytest.fixture
 def source():
     return Source(
         name="Test Source",
@@ -111,23 +102,34 @@ def mock_rss_response(mock_get, content: str = RSS_ITEM):
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_success(mock_db, source):
-    collector = RSSCollector(mock_db)
+async def test_collect_all_skips_when_event_intelligence_unavailable(source):
+    collector = RSSCollector()
 
-    with patch("aiohttp.ClientSession.get") as mock_get:
-        mock_rss_response(mock_get)
+    with patch("src.services.collector.SOURCES", [source]):
+        stats = await collector.collect_all()
 
-        result = await collector.fetch_source(source)
-
-    assert result["new_count"] == 1
-    mock_db.save_news.assert_called_once()
+    assert stats["sources_total"] == 1
+    assert stats["sources_skipped"] == 1
+    assert stats["skipped"] == 1
+    assert stats["articles_inserted"] == 0
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
-    mock_db, source
+async def test_fetch_source_skips_when_event_intelligence_unavailable(source):
+    collector = RSSCollector()
+
+    result = await collector.fetch_source(source)
+
+    assert result["skipped"] is True
+    assert result["reason"] == "event_intelligence_unavailable"
+    assert result["articles_inserted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_source_persists_event_intelligence_article_without_legacy_mirror(
+    source,
 ):
-    collector = RSSCollector(mock_db)
+    collector = RSSCollector()
     normalizer = StubNormalizer()
     repository = StubRepository()
     feature_extractor = StubFeatureExtractor()
@@ -163,10 +165,6 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
             "score": None,
         }
 
-    async def save_news(*args, **kwargs):
-        call_order.append("legacy-save")
-        return True
-
     async def enrich_event(event_id, *, event=None):
         call_order.append("event-enrich")
         assert event_id == "evt_1"
@@ -179,7 +177,6 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
     deduper.link_semantic_duplicates = AsyncMock(side_effect=link_semantic_duplicates)
     event_extractor.extract_and_persist = AsyncMock(side_effect=upsert_event)
     event_enrichment.enrich_event = AsyncMock(side_effect=enrich_event)
-    mock_db.save_news = AsyncMock(side_effect=save_news)
     collector.configure_event_intelligence(
         article_normalizer=normalizer,
         article_repository=repository,
@@ -191,7 +188,6 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
 
     with patch("aiohttp.ClientSession.get") as mock_get:
         mock_rss_response(mock_get)
-
         result = await collector.fetch_source(source)
 
     assert result["new_count"] == 1
@@ -203,7 +199,6 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
         "semantic-dedup",
         "event-upsert",
         "event-enrich",
-        "legacy-save",
     ]
     assert result["articles_seen"] == 1
     assert result["articles_inserted"] == 1
@@ -212,7 +207,6 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
     assert result["events_created"] == 1
     assert result["events_updated"] == 0
     assert result["events_touched"] == 1
-    assert result["legacy_mirrored"] == 1
     repository.create_article.assert_awaited_once_with(
         normalizer.article.to_article_payload()
     )
@@ -222,22 +216,13 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
         normalizer.article,
         embedding=[0.1, 0.2, 0.3],
     )
-    event_extractor.extract_and_persist.assert_awaited_once_with(
-        normalizer.article,
-        extracted_features={"article_id": "art_news1", "embedding": [0.1, 0.2, 0.3]},
-    )
-    event_enrichment.enrich_event.assert_awaited_once_with(
-        "evt_1",
-        event={"event_id": "evt_1"},
-    )
-    mock_db.save_news.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_fetch_source_continues_when_event_intelligence_feature_extraction_fails(
-    mock_db, source
+    source,
 ):
-    collector = RSSCollector(mock_db)
+    collector = RSSCollector()
     normalizer = StubNormalizer()
     repository = StubRepository()
     feature_extractor = StubFeatureExtractor()
@@ -252,7 +237,6 @@ async def test_fetch_source_continues_when_event_intelligence_feature_extraction
 
     with patch("aiohttp.ClientSession.get") as mock_get:
         mock_rss_response(mock_get)
-
         result = await collector.fetch_source(source)
 
     assert result["new_count"] == 1
@@ -260,49 +244,39 @@ async def test_fetch_source_continues_when_event_intelligence_feature_extraction
     deduper.link_cheap_duplicates.assert_awaited_once_with(normalizer.article)
     feature_extractor.extract_and_persist.assert_awaited_once_with(normalizer.article)
     deduper.link_semantic_duplicates.assert_not_awaited()
-    mock_db.save_news.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_keeps_event_intelligence_article_when_legacy_mirror_fails(
-    mock_db, source
+async def test_fetch_source_does_not_fallback_when_article_persist_fails_without_existing_record(
+    source,
 ):
-    collector = RSSCollector(mock_db)
+    collector = RSSCollector()
     normalizer = StubNormalizer()
     repository = StubRepository()
+    repository.create_article.side_effect = RuntimeError("db unavailable")
+    repository.get_article.return_value = None
     feature_extractor = StubFeatureExtractor()
-    deduper = StubSemanticDeduper()
-    mock_db.save_news.side_effect = RuntimeError("sqlite unavailable")
     collector.configure_event_intelligence(
         article_normalizer=normalizer,
         article_repository=repository,
         article_feature_extractor=feature_extractor,
-        semantic_deduper=deduper,
     )
 
     with patch("aiohttp.ClientSession.get") as mock_get:
         mock_rss_response(mock_get)
-
         result = await collector.fetch_source(source)
 
-    assert result["new_count"] == 1
-    repository.create_article.assert_awaited_once_with(
-        normalizer.article.to_article_payload()
-    )
-    feature_extractor.extract_and_persist.assert_awaited_once_with(normalizer.article)
-    deduper.link_cheap_duplicates.assert_awaited_once_with(normalizer.article)
-    deduper.link_semantic_duplicates.assert_awaited_once_with(
-        normalizer.article,
-        embedding=[0.1, 0.2, 0.3],
-    )
-    mock_db.save_news.assert_awaited_once()
+    assert result["new_count"] == 0
+    assert result["articles_inserted"] == 0
+    repository.get_article.assert_awaited_once_with(normalizer.article.article_id)
+    feature_extractor.extract_and_persist.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_fetch_source_refreshes_features_for_existing_event_intelligence_article(
-    mock_db, source
+    source,
 ):
-    collector = RSSCollector(mock_db)
+    collector = RSSCollector()
     normalizer = StubNormalizer()
     repository = StubRepository()
     repository.create_article.side_effect = RuntimeError("duplicate key")
@@ -318,7 +292,6 @@ async def test_fetch_source_refreshes_features_for_existing_event_intelligence_a
 
     with patch("aiohttp.ClientSession.get") as mock_get:
         mock_rss_response(mock_get)
-
         result = await collector.fetch_source(source)
 
     assert result["new_count"] == 1
@@ -332,73 +305,23 @@ async def test_fetch_source_refreshes_features_for_existing_event_intelligence_a
 
 
 @pytest.mark.asyncio
-async def test_fetch_source_continues_when_dedup_linking_fails(mock_db, source):
-    collector = RSSCollector(mock_db)
-    normalizer = StubNormalizer()
-    repository = StubRepository()
-    feature_extractor = StubFeatureExtractor()
-    deduper = StubSemanticDeduper()
-    deduper.link_cheap_duplicates.side_effect = RuntimeError("cheap dedup failed")
-    deduper.link_semantic_duplicates.side_effect = RuntimeError("semantic dedup failed")
-    collector.configure_event_intelligence(
-        article_normalizer=normalizer,
-        article_repository=repository,
-        article_feature_extractor=feature_extractor,
-        semantic_deduper=deduper,
-    )
-
-    with patch("aiohttp.ClientSession.get") as mock_get:
-        mock_rss_response(mock_get)
-
-        result = await collector.fetch_source(source)
-
-    assert result["new_count"] == 1
-    repository.create_article.assert_awaited_once_with(
-        normalizer.article.to_article_payload()
-    )
-    feature_extractor.extract_and_persist.assert_awaited_once_with(normalizer.article)
-    deduper.link_cheap_duplicates.assert_awaited_once_with(normalizer.article)
-    deduper.link_semantic_duplicates.assert_awaited_once_with(
-        normalizer.article,
-        embedding=[0.1, 0.2, 0.3],
-    )
-    mock_db.save_news.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_circuit_breaker_cooldown(mock_db, source):
-    collector = RSSCollector(mock_db)
-    failure_source = source.model_copy(update={"name": "Failure Source"})
-
-    with patch("aiohttp.ClientSession.get", side_effect=Exception("Network Error")):
-        for _ in range(3):
-            await collector.fetch_source(failure_source)
-
-    result = await collector.fetch_source(failure_source)
-    assert result.get("skipped") is True
-
-
-@pytest.mark.asyncio
-async def test_collect_all_aggregates_extended_ingestion_metrics(mock_db, source):
-    collector = RSSCollector(mock_db)
+async def test_collect_all_aggregates_extended_ingestion_metrics(source):
+    collector = RSSCollector()
     other_source = source.model_copy(
         update={"name": "Other Source", "url": "http://other.rss", "tier": 2}
     )
 
-    class StubClientSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
+    collector.configure_event_intelligence(
+        article_normalizer=StubNormalizer(),
+        article_repository=StubRepository(),
+        article_feature_extractor=StubFeatureExtractor(),
+    )
     collector.fetch_source = AsyncMock(
         side_effect=[
             {
                 "new_count": 2,
                 "articles_seen": 3,
                 "articles_inserted": 2,
-                "legacy_mirrored": 2,
                 "duplicate_refreshes": 1,
                 "feature_failures": 0,
                 "cheap_dedup_links": 1,
@@ -412,7 +335,6 @@ async def test_collect_all_aggregates_extended_ingestion_metrics(mock_db, source
                 "error": "timeout",
                 "articles_seen": 1,
                 "articles_inserted": 0,
-                "legacy_mirrored": 0,
                 "duplicate_refreshes": 0,
                 "feature_failures": 1,
                 "cheap_dedup_links": 0,
@@ -424,6 +346,13 @@ async def test_collect_all_aggregates_extended_ingestion_metrics(mock_db, source
             },
         ]
     )
+
+    class StubClientSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
 
     with patch("src.services.collector.SOURCES", [source, other_source]):
         with patch(

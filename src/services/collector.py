@@ -5,7 +5,6 @@ from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, cast
 from ..config.settings import CONFIG
 from ..config.sources import SOURCES, Source, resolve_source_url
 from .circuit_breaker import RSSCircuitBreaker
-from .db_service import DBService
 from .article_models import ArticleRecord
 from .metrics import default_ingestion_metrics, safe_ratio
 from ..utils.extractor import Extractor
@@ -62,8 +61,7 @@ class EventEnrichmentLike(Protocol):
 
 
 class RSSCollector:
-    def __init__(self, db: DBService):
-        self.db = db
+    def __init__(self):
         self.breaker = RSSCircuitBreaker(
             max_failures=CONFIG.cb_max_failures, cooldown_ms=CONFIG.cb_cooldown_ms
         )
@@ -108,6 +106,14 @@ class RSSCollector:
 
         # 按 tier 排序
         sorted_sources = sorted(SOURCES, key=lambda s: s.tier)
+        if not self._event_intelligence_enabled():
+            metrics = default_ingestion_metrics(sources_total=len(sorted_sources))
+            metrics["sources_skipped"] = len(sorted_sources)
+            metrics["skipped"] = len(sorted_sources)
+            logger.warning(
+                "Event Intelligence ingestion wiring 未就绪，采集任务按 fail-closed 跳过。"
+            )
+            return metrics
 
         timeout = aiohttp.ClientTimeout(total=CONFIG.rss_timeout_ms / 1000)
         connector = aiohttp.TCPConnector(limit=max(CONFIG.rss_concurrency * 2, 20))
@@ -146,6 +152,15 @@ class RSSCollector:
         self, source: Source, session: Optional[aiohttp.ClientSession] = None
     ) -> Dict[str, Any]:
         """抓取单个源"""
+        if not self._event_intelligence_enabled():
+            logger.warning(
+                f"[SKIP] T{source.tier} {source.name}: event intelligence ingestion unavailable"
+            )
+            return {
+                "skipped": True,
+                "reason": "event_intelligence_unavailable",
+                **self._empty_source_metrics(),
+            }
         if self.breaker.is_on_cooldown(source.name):
             return {"skipped": True, **self._empty_source_metrics()}
 
@@ -251,13 +266,7 @@ class RSSCollector:
                         inserted = bool(ingest_result.get("inserted"))
                         self._merge_ingestion_metrics(source_metrics, ingest_result)
                     else:
-                        inserted = await self._save_legacy_news(
-                            link=link,
-                            title=title,
-                            content=final_content,
-                            source=source,
-                        )
-                        source_metrics["articles_inserted"] += int(inserted)
+                        inserted = False
 
                     if inserted:
                         new_count += 1
@@ -277,45 +286,6 @@ class RSSCollector:
                 if managed_session:
                     await active_session.close()
 
-    async def _save_legacy_news(
-        self,
-        *,
-        link: str,
-        title: str,
-        content: str,
-        source: Source,
-    ) -> bool:
-        if await self.db.has_news(link):
-            return False
-        if await self.db.has_similar_title(title):
-            return False
-        return await self.db.save_news(
-            link,
-            title,
-            content,
-            source.name,
-            meta={"tier": source.tier, "sourceType": source.type},
-        )
-
-    async def _mirror_legacy_news(
-        self,
-        *,
-        link: str,
-        title: str,
-        content: str,
-        source: Source,
-    ) -> bool:
-        try:
-            return await self._save_legacy_news(
-                link=link,
-                title=title,
-                content=content,
-                source=source,
-            )
-        except Exception as exc:
-            logger.error(f"[EIL] Failed to mirror legacy news {link}: {exc}")
-            return False
-
     async def _ingest_event_intelligence_article(
         self,
         *,
@@ -334,14 +304,7 @@ class RSSCollector:
         event_enrichment = self.event_enrichment
         metrics = self._empty_source_metrics()
         if not self._event_intelligence_enabled():
-            inserted = await self._save_legacy_news(
-                link=link,
-                title=title,
-                content=content,
-                source=source,
-            )
-            metrics["articles_inserted"] += int(inserted)
-            return {"inserted": inserted, **metrics}
+            return {"inserted": False, **metrics}
 
         normalizer = cast(ArticleNormalizerLike, article_normalizer)
         repository = cast(ArticleRepositoryLike, article_repository)
@@ -368,14 +331,7 @@ class RSSCollector:
             article = normalizer.normalize(raw_article)
         except Exception as exc:
             logger.error(f"[EIL] Failed to normalize article {link}: {exc}")
-            inserted = await self._save_legacy_news(
-                link=link,
-                title=title,
-                content=content,
-                source=source,
-            )
-            metrics["articles_inserted"] += int(inserted)
-            return {"inserted": inserted, **metrics}
+            return {"inserted": False, **metrics}
 
         created = False
         duplicate_refresh = False
@@ -387,15 +343,7 @@ class RSSCollector:
             existing = await repository.get_article(article.article_id)
             if existing is None:
                 logger.error(f"[EIL] Failed to persist article {link}: {exc}")
-                inserted = await self._mirror_legacy_news(
-                    link=link,
-                    title=title,
-                    content=content,
-                    source=source,
-                )
-                metrics["articles_inserted"] += int(inserted)
-                metrics["legacy_mirrored"] += int(inserted)
-                return {"inserted": inserted, **metrics}
+                return {"inserted": False, **metrics}
             logger.warning(
                 f"[EIL] Article already exists for {link}; refreshing features: {exc}"
             )
@@ -472,15 +420,8 @@ class RSSCollector:
             except Exception as exc:
                 logger.error(f"[EIL] Failed to upsert event candidate for {link}: {exc}")
 
-        legacy_inserted = await self._mirror_legacy_news(
-            link=link,
-            title=title,
-            content=content,
-            source=source,
-        )
-        metrics["legacy_mirrored"] += int(legacy_inserted)
         return {
-            "inserted": created or duplicate_refresh or legacy_inserted,
+            "inserted": created or duplicate_refresh,
             **metrics,
         }
 
@@ -489,7 +430,6 @@ class RSSCollector:
         return {
             "articles_seen": 0,
             "articles_inserted": 0,
-            "legacy_mirrored": 0,
             "duplicate_refreshes": 0,
             "feature_failures": 0,
             "cheap_dedup_links": 0,
