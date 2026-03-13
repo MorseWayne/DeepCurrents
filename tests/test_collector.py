@@ -68,6 +68,16 @@ class StubEventCandidateExtractor:
         )
 
 
+class StubEventEnrichment:
+    def __init__(self):
+        self.enrich_event = AsyncMock(
+            return_value={
+                "event": {"event_id": "evt_1", "event_type": "general"},
+                "enrichment": {"event_type": "general"},
+            }
+        )
+
+
 @pytest.fixture
 def mock_db():
     db = MagicMock()
@@ -118,6 +128,7 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
     feature_extractor = StubFeatureExtractor()
     deduper = StubSemanticDeduper()
     event_extractor = StubEventCandidateExtractor()
+    event_enrichment = StubEventEnrichment()
     call_order = []
 
     async def create_article(payload):
@@ -146,11 +157,18 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
         call_order.append("legacy-save")
         return True
 
+    async def enrich_event(event_id, *, event=None):
+        call_order.append("event-enrich")
+        assert event_id == "evt_1"
+        assert event == {"event_id": "evt_1"}
+        return {"event": {"event_id": event_id}, "enrichment": {"event_type": "general"}}
+
     repository.create_article = AsyncMock(side_effect=create_article)
     feature_extractor.extract_and_persist = AsyncMock(side_effect=extract_and_persist)
     deduper.link_cheap_duplicates = AsyncMock(side_effect=link_cheap_duplicates)
     deduper.link_semantic_duplicates = AsyncMock(side_effect=link_semantic_duplicates)
     event_extractor.extract_and_persist = AsyncMock(side_effect=upsert_event)
+    event_enrichment.enrich_event = AsyncMock(side_effect=enrich_event)
     mock_db.save_news = AsyncMock(side_effect=save_news)
     collector.configure_event_intelligence(
         article_normalizer=normalizer,
@@ -158,6 +176,7 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
         article_feature_extractor=feature_extractor,
         semantic_deduper=deduper,
         event_candidate_extractor=event_extractor,
+        event_enrichment=event_enrichment,
     )
 
     with patch("aiohttp.ClientSession.get") as mock_get:
@@ -173,6 +192,7 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
         "feature-save",
         "semantic-dedup",
         "event-upsert",
+        "event-enrich",
         "legacy-save",
     ]
     repository.create_article.assert_awaited_once_with(
@@ -187,6 +207,10 @@ async def test_fetch_source_persists_event_intelligence_before_legacy_mirror(
     event_extractor.extract_and_persist.assert_awaited_once_with(
         normalizer.article,
         extracted_features={"article_id": "art_news1", "embedding": [0.1, 0.2, 0.3]},
+    )
+    event_enrichment.enrich_event.assert_awaited_once_with(
+        "evt_1",
+        event={"event_id": "evt_1"},
     )
     mock_db.save_news.assert_awaited_once()
 

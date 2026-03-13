@@ -25,10 +25,11 @@
   10. `EIL-105`：已新增 `src/services/semantic_deduper.py`，完成 cheap dedup（exact + near）与 semantic dedup 两段式流程，并将 exact / near / semantic 关系幂等写入 `article_dedup_links`；同时通过 `tests/test_semantic_deduper.py` 与 collector 集成测试固定 article-first 顺序和 dedup 容错行为。
   11. `EIL-201`：已在 `src/services/event_builder.py` 落地事件候选检索与“加入已有事件 / 创建新事件”分流主路径，完成 `events` / `event_members` 写入与计数字段维护，并通过 `tests/test_event_builder.py` 固化 article-to-event 映射契约。
   12. `EIL-202`：已新增 `src/services/event_state_machine.py`，并在 `src/services/event_builder.py` 中接入 embedding / 实体 / 区域 / 时间 / 冲突规则的多信号合并判定、`new|active|updated|escalating|stabilizing|resolved|dormant` 状态机和 `event_state_transitions` 审计写入；同时补齐 `tests/test_event_state_machine.py`、`tests/test_event_builder.py` 与 `tests/test_engine.py` 的迁移与接线测试。
+  13. `EIL-203`：已新增 `src/services/event_enrichment.py`，完成从 `event_members + articles + article_features + event_state_transitions` 聚合 regions / entities / assets / market channels / supporting sources / contradicting sources，并将 enrichment 写回 `events.primary_region`、`events.event_type` 与 `events.metadata.enrichment`；同时在 `src/services/collector.py` / `src/engine.py` 接入事件增强主路径，并补齐 `tests/test_event_enrichment.py`、`tests/test_collector.py` 与 `tests/test_engine.py` 的聚合与接线测试。
 - 下一步:
-  1. `EIL-203`：实现 `event_enrichment`，把事件成员层的 regions / entities / assets / market channels 聚合到事件对象，并显式保留 supporting / contradicting sources。
-  2. `EIL-204`：补齐事件检索、状态回放和调试接口，为评估与人工 review 提供统一查询入口。
-  3. 做一轮带真实 PostgreSQL / Redis / Qdrant 的本地联调，确认 schema bootstrap、store health、repository 读写以及 article feature / vector write / event transition 边界在真实依赖下正常工作。
+  1. `EIL-204`：补齐事件检索、状态回放和调试接口，为评估与人工 review 提供统一查询入口。
+  2. `EIL-301`：在 enrichment 稳定输出上接 `event_ranker`，开始把 threat / impact / novelty / corroboration 等维度写入 `event_scores`。
+  3. 做一轮带真实 PostgreSQL / Redis / Qdrant 的本地联调，确认 schema bootstrap、store health、repository 读写以及 article feature / vector write / event transition / event enrichment 边界在真实依赖下正常工作。
 
 ---
 
@@ -311,7 +312,7 @@
   1. `.venv/bin/pytest tests/test_event_state_machine.py tests/test_event_builder.py tests/test_engine.py` 通过（18 passed）。
   2. `.venv/bin/pytest tests/test_collector.py tests/test_semantic_deduper.py tests/test_event_intelligence_repositories.py` 通过（20 passed）。
 
-### [ ] EIL-203: `event_enrichment` 结构化标签聚合
+### [x] EIL-203: `event_enrichment` 结构化标签聚合
 
 - 主要模块: `src/services/event_enrichment.py`
 - 主要工作:
@@ -325,6 +326,13 @@
 - 验收标准:
   1. 高价值事件具备稳定的结构化标签。
   2. 冲突叙事可以被显式保留。
+- 当前实现说明:
+  1. `src/services/event_enrichment.py` 已新增 `EventEnrichmentService`，可从 `event_members + articles + article_features + event_state_transitions` 聚合 `regions / entities / assets / market_channels / event_type / supporting_sources / contradicting_sources / last_transition`。
+  2. enrichment 结果会写回 `events.primary_region`、`events.event_type` 和 `events.metadata.enrichment`，并提供 `enrich_event()` / `get_event_enrichment()` 两个入口供后续 `EIL-204` 直接复用。
+  3. `src/services/collector.py` 已在 `event_builder` 之后追加 event enrichment，`src/engine.py` 已把 `EventEnrichmentService` 接到 runtime wiring，保证 ingestion 主链路能持续刷新事件增强信息。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_event_enrichment.py tests/test_collector.py tests/test_engine.py` 通过（17 passed）。
+  2. `.venv/bin/pytest tests/test_event_builder.py tests/test_event_state_machine.py tests/test_semantic_deduper.py tests/test_event_intelligence_repositories.py` 通过（24 passed）。
 
 ### [ ] EIL-204: 事件检索、回放与调试接口
 

@@ -51,6 +51,15 @@ class EventCandidateExtractorLike(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class EventEnrichmentLike(Protocol):
+    async def enrich_event(
+        self,
+        event_id: str,
+        *,
+        event: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
 class RSSCollector:
     def __init__(self, db: DBService):
         self.db = db
@@ -66,6 +75,7 @@ class RSSCollector:
         self.article_feature_extractor: ArticleFeatureExtractorLike | None = None
         self.semantic_deduper: SemanticDeduperLike | None = None
         self.event_candidate_extractor: EventCandidateExtractorLike | None = None
+        self.event_enrichment: EventEnrichmentLike | None = None
 
     def configure_event_intelligence(
         self,
@@ -75,12 +85,14 @@ class RSSCollector:
         article_feature_extractor: ArticleFeatureExtractorLike | None = None,
         semantic_deduper: SemanticDeduperLike | None = None,
         event_candidate_extractor: EventCandidateExtractorLike | None = None,
+        event_enrichment: EventEnrichmentLike | None = None,
     ) -> None:
         self.article_normalizer = article_normalizer
         self.article_repository = article_repository
         self.article_feature_extractor = article_feature_extractor
         self.semantic_deduper = semantic_deduper
         self.event_candidate_extractor = event_candidate_extractor
+        self.event_enrichment = event_enrichment
 
     def _event_intelligence_enabled(self) -> bool:
         return (
@@ -304,6 +316,7 @@ class RSSCollector:
         article_feature_extractor = self.article_feature_extractor
         semantic_deduper = self.semantic_deduper
         event_candidate_extractor = self.event_candidate_extractor
+        event_enrichment = self.event_enrichment
         if not self._event_intelligence_enabled():
             return await self._save_legacy_news(
                 link=link,
@@ -391,12 +404,34 @@ class RSSCollector:
             EventCandidateExtractorLike | None,
             event_candidate_extractor,
         )
+        event_enricher = cast(EventEnrichmentLike | None, event_enrichment)
         if event_extractor is not None:
             try:
-                await event_extractor.extract_and_persist(
+                event_result = await event_extractor.extract_and_persist(
                     article,
                     extracted_features=extracted_features,
                 )
+                if event_enricher is not None:
+                    event_payload = (
+                        event_result.get("event")
+                        if isinstance(event_result, Mapping)
+                        else None
+                    )
+                    event_id = (
+                        self._text(event_payload.get("event_id"))
+                        if isinstance(event_payload, Mapping)
+                        else ""
+                    )
+                    if event_id:
+                        try:
+                            await event_enricher.enrich_event(
+                                event_id,
+                                event=cast(Mapping[str, Any], event_payload),
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                f"[EIL] Failed to enrich event {event_id} for {link}: {exc}"
+                            )
             except Exception as exc:
                 logger.error(f"[EIL] Failed to upsert event candidate for {link}: {exc}")
 
@@ -407,3 +442,11 @@ class RSSCollector:
             source=source,
         )
         return created or legacy_inserted
+
+    @staticmethod
+    def _text(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return str(value).strip()

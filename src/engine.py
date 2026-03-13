@@ -62,6 +62,7 @@ class DeepCurrentsEngine:
                 return
 
             from .services.article_feature_extractor import ArticleFeatureExtractor
+            from .services.event_enrichment import EventEnrichmentService
             from .services.article_normalizer import ArticleNormalizer
             from .services.article_repository import ArticleRepository
             from .services.event_builder import EventBuilder
@@ -79,6 +80,10 @@ class DeepCurrentsEngine:
                 cast("VectorStoreLike", vector_store),
             )
             event_repository = EventRepository(postgres_pool)
+            event_enrichment = EventEnrichmentService(
+                event_repository,
+                article_repository,
+            )
             event_builder = EventBuilder(
                 event_repository,
                 article_repository,
@@ -92,6 +97,7 @@ class DeepCurrentsEngine:
                 event_candidate_extractor=cast(
                     "EventCandidateExtractorLike", event_builder
                 ),
+                event_enrichment=event_enrichment,
             )
         except Exception as exc:
             self.collector.configure_event_intelligence()
