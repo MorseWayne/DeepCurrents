@@ -18,6 +18,7 @@ class FakeEventRepository:
         self.updated_events: list[dict[str, Any]] = []
         self.added_members: list[dict[str, Any]] = []
         self.upserted_scores: list[dict[str, Any]] = []
+        self.transitions: list[dict[str, Any]] = []
 
     async def list_recent_events(
         self,
@@ -64,31 +65,71 @@ class FakeEventRepository:
         self.upserted_scores.append(payload)
         return payload
 
+    async def record_state_transition(
+        self, transition: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        payload = dict(transition)
+        self.transitions.append(payload)
+        return payload
+
 
 class FakeArticleRepository:
     def __init__(self):
         self.rows: dict[str, dict[str, Any]] = {}
+        self.features: dict[str, dict[str, Any]] = {}
 
     async def get_article(self, article_id: str) -> dict[str, Any] | None:
         row = self.rows.get(article_id)
         return dict(row) if row else None
 
+    async def get_article_features(self, article_id: str) -> dict[str, Any] | None:
+        row = self.features.get(article_id)
+        return dict(row) if row else None
 
-def make_article() -> ArticleRecord:
-    return ArticleRecord(
-        article_id="art_new",
-        source_id="reuters",
-        canonical_url="https://example.com/new",
-        title="Oil prices surge after refinery outage",
-        normalized_title="oil prices surge after refinery outage",
-        content="Oil prices surge after refinery outage in Europe.",
-        clean_content="Oil prices surge after refinery outage in Europe.",
-        published_at=datetime(2026, 3, 13, 8, 0, tzinfo=UTC),
-        ingested_at=datetime(2026, 3, 13, 8, 5, tzinfo=UTC),
-        language="en",
-        tier=1,
-        source_type="wire",
-    )
+
+class FakeVectorStore:
+    def __init__(self, *, results: Sequence[Mapping[str, Any]] | None = None):
+        self.results = [dict(item) for item in (results or [])]
+        self.calls: list[dict[str, Any]] = []
+
+    async def query_similar_points(
+        self,
+        collection_name: str,
+        *,
+        query_vector: Sequence[float],
+        limit: int = 10,
+        score_threshold: float | None = None,
+        with_payload: bool | Sequence[str] = True,
+    ) -> list[dict[str, Any]]:
+        self.calls.append(
+            {
+                "collection_name": collection_name,
+                "query_vector": list(query_vector),
+                "limit": limit,
+                "score_threshold": score_threshold,
+                "with_payload": with_payload,
+            }
+        )
+        return list(self.results)
+
+
+def make_article(**overrides) -> ArticleRecord:
+    base = {
+        "article_id": "art_new",
+        "source_id": "reuters",
+        "canonical_url": "https://example.com/new",
+        "title": "Oil prices surge after refinery outage",
+        "normalized_title": "oil prices surge after refinery outage",
+        "content": "Oil prices surge after refinery outage in Europe.",
+        "clean_content": "Oil prices surge after refinery outage in Europe.",
+        "published_at": datetime(2026, 3, 13, 8, 0, tzinfo=UTC),
+        "ingested_at": datetime(2026, 3, 13, 8, 5, tzinfo=UTC),
+        "language": "en",
+        "tier": 1,
+        "source_type": "wire",
+    }
+    base.update(overrides)
+    return ArticleRecord(**base)
 
 
 @pytest.mark.asyncio
@@ -111,11 +152,14 @@ async def test_event_builder_creates_new_event_when_no_candidates_match():
     assert result["event"]["article_count"] == 1
     assert result["member"]["role"] == "primary"
     assert result["member"]["is_primary"] is True
+    assert result["transition"]["to_state"] == "new"
+    assert result["transition"]["reason"] == "event_created"
     assert event_repo.created_events
+    assert len(event_repo.transitions) == 1
 
 
 @pytest.mark.asyncio
-async def test_event_builder_attaches_article_to_best_recent_event():
+async def test_event_builder_attaches_article_to_best_recent_event_without_transition():
     event_repo = FakeEventRepository()
     article_repo = FakeArticleRepository()
 
@@ -170,12 +214,174 @@ async def test_event_builder_attaches_article_to_best_recent_event():
 
     assert event_repo.updated_events[0]["article_count"] == 3
     assert event_repo.updated_events[0]["source_count"] == 2
+    assert event_repo.updated_events[0]["status"] == "active"
+    assert result["transition"] is None
     assert event_repo.updated_events[0]["started_at"] == datetime(
         2026, 3, 13, 7, 30, tzinfo=UTC
     )
     assert event_repo.updated_events[0]["latest_article_at"] == datetime(
         2026, 3, 13, 8, 0, tzinfo=UTC
     )
+
+
+@pytest.mark.asyncio
+async def test_event_builder_uses_semantic_and_entity_signals_to_merge_and_activate():
+    event_repo = FakeEventRepository()
+    article_repo = FakeArticleRepository()
+    vector_store = FakeVectorStore(
+        results=[
+            {
+                "id": "art_old_1",
+                "score": 0.94,
+                "payload": {"article_id": "art_old_1"},
+            }
+        ]
+    )
+
+    event_repo.events = [
+        {
+            "event_id": "evt_red_sea",
+            "status": "new",
+            "canonical_title": "attack near bab al-mandab raises shipping risks",
+            "started_at": datetime(2026, 3, 13, 1, 0, tzinfo=UTC),
+            "latest_article_at": datetime(2026, 3, 13, 1, 35, tzinfo=UTC),
+            "article_count": 1,
+        }
+    ]
+    event_repo.members_by_event = {
+        "evt_red_sea": [
+            {
+                "event_id": "evt_red_sea",
+                "article_id": "art_old_1",
+                "is_primary": True,
+                "role": "primary",
+            }
+        ]
+    }
+    article_repo.rows = {
+        "art_old_1": {
+            "article_id": "art_old_1",
+            "source_id": "al-jazeera",
+            "title": "Attack near Bab al-Mandab raises shipping risks",
+            "clean_content": "Attack near Bab al-Mandab raises shipping risks in the Red Sea.",
+        }
+    }
+    article_repo.features = {
+        "art_old_1": {
+            "entities": [
+                {"name": "Red Sea", "type": "location"},
+                {"name": "Bab al-Mandab", "type": "location"},
+            ]
+        }
+    }
+
+    builder = EventBuilder(
+        event_repo,
+        article_repo,
+        vector_store,
+        title_similarity_threshold=0.85,
+    )
+    article = make_article(
+        title="Missile strike disrupts Red Sea shipping",
+        normalized_title="missile strike disrupts red sea shipping",
+        content="Missile strike disrupts Red Sea shipping near Bab al-Mandab.",
+        clean_content="Missile strike disrupts Red Sea shipping near Bab al-Mandab.",
+    )
+    result = await builder.assign_article_to_event(
+        article,
+        extracted_features={
+            "embedding": [0.1, 0.2, 0.3],
+            "entities": [
+                {"name": "Red Sea", "type": "location"},
+                {"name": "Bab al-Mandab", "type": "location"},
+            ],
+        },
+    )
+
+    assert result["created"] is False
+    assert result["event"]["event_id"] == "evt_red_sea"
+    assert result["event"]["status"] == "active"
+    assert result["transition"]["from_state"] == "new"
+    assert result["transition"]["to_state"] == "active"
+    assert result["transition"]["reason"] == "event_confirmed"
+    assert result["merge_signals"]["semantic_support"] == pytest.approx(0.94)
+    assert result["merge_signals"]["entity_overlap"] == pytest.approx(1.0)
+    assert vector_store.calls[0]["collection_name"] == "article_features"
+
+
+@pytest.mark.asyncio
+async def test_event_builder_rejects_conflicting_policy_direction_even_with_strong_similarity():
+    event_repo = FakeEventRepository()
+    article_repo = FakeArticleRepository()
+    vector_store = FakeVectorStore(
+        results=[
+            {
+                "id": "art_old_1",
+                "score": 0.97,
+                "payload": {"article_id": "art_old_1"},
+            }
+        ]
+    )
+    event_repo.events = [
+        {
+            "event_id": "evt_rates",
+            "status": "active",
+            "canonical_title": "turkey unexpectedly hikes benchmark rate",
+            "started_at": datetime(2026, 3, 13, 5, 30, tzinfo=UTC),
+            "latest_article_at": datetime(2026, 3, 13, 6, 5, tzinfo=UTC),
+            "article_count": 3,
+        }
+    ]
+    event_repo.members_by_event = {
+        "evt_rates": [
+            {
+                "event_id": "evt_rates",
+                "article_id": "art_old_1",
+                "is_primary": True,
+                "role": "primary",
+            }
+        ]
+    }
+    article_repo.rows = {
+        "art_old_1": {
+            "article_id": "art_old_1",
+            "source_id": "bloomberg",
+            "title": "Turkey unexpectedly hikes benchmark rate",
+            "clean_content": "Turkey unexpectedly hikes benchmark rate after inflation concerns.",
+        }
+    }
+    article_repo.features = {
+        "art_old_1": {
+            "entities": [
+                {"name": "Turkey", "type": "location"},
+                {"name": "Central Bank", "type": "org"},
+            ]
+        }
+    }
+
+    builder = EventBuilder(event_repo, article_repo, vector_store)
+    article = make_article(
+        title="Turkey unexpectedly cuts benchmark rate",
+        normalized_title="turkey unexpectedly cuts benchmark rate",
+        content="Turkey unexpectedly cuts benchmark rate after market pressure.",
+        clean_content="Turkey unexpectedly cuts benchmark rate after market pressure.",
+        source_id="financial-times",
+    )
+    result = await builder.assign_article_to_event(
+        article,
+        extracted_features={
+            "embedding": [0.4, 0.5, 0.6],
+            "entities": [
+                {"name": "Turkey", "type": "location"},
+                {"name": "Central Bank", "type": "org"},
+            ],
+        },
+    )
+
+    assert result["created"] is True
+    assert result["event"]["event_id"] != "evt_rates"
+    assert event_repo.updated_events == []
+    assert event_repo.transitions[-1]["to_state"] == "new"
 
 
 @pytest.mark.asyncio

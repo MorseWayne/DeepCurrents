@@ -79,7 +79,11 @@ class DeepCurrentsEngine:
                 cast("VectorStoreLike", vector_store),
             )
             event_repository = EventRepository(postgres_pool)
-            event_builder = EventBuilder(event_repository, article_repository)
+            event_builder = EventBuilder(
+                event_repository,
+                article_repository,
+                cast("VectorStoreLike", vector_store),
+            )
             self.collector.configure_event_intelligence(
                 article_normalizer=ArticleNormalizer(),
                 article_repository=article_repository,

@@ -219,6 +219,7 @@ async def test_configure_event_intelligence_ingestion_wires_collector_when_runti
     fake_event_builder_module.EventBuilder.assert_called_once_with(
         event_repository_instance,
         repository_instance,
+        vector_store,
     )
     engine.collector.configure_event_intelligence.assert_called_once_with(
         article_normalizer=normalizer_instance,

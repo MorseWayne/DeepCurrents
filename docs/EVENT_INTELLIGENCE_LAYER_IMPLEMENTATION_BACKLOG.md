@@ -11,7 +11,7 @@
 ## 0. 开发进度
 
 - 更新时间: 2026-03-13
-- 当前批次: `Batch 1`
+- 当前批次: `Batch 2`
 - 已完成:
   1. `EIL-000`：已落地 `tests/fixtures/event_intelligence/`、`tests/evaluation/fixture_loader.py`、`tests/test_event_intelligence_fixture_loader.py`，固定三类评估样本并提供可重复加载入口。
   2. `EIL-001`：已在 `src/config/settings.py` 增加 Event Intelligence runtime 配置项，在 `src/services/event_intelligence_bootstrap.py` 建立最小 bootstrap 骨架，并接入 `src/engine.py` / `src/run_report.py` 的共享启动路径。
@@ -22,10 +22,13 @@
   7. `EIL-102`：已新增 `src/services/article_normalizer.py`，落地 URL canonicalization、标题/正文清洗、时间标准化、语言识别、exact hash / simhash 生成，并通过 `tests/test_article_normalizer.py` 固定 collector 风格输入与中英文样本行为。
   8. `EIL-103`：已新增 `src/services/article_feature_extractor.py`，打通 `ArticleRecord.to_feature_seed()` -> embedding / entities / keywords / quality score 生成 -> `article_features` 写入，并在 `src/services/vector_store.py` 增加 Qdrant collection ensure / point upsert 能力；同时补齐 `tests/test_article_feature_extractor.py` 与 `tests/test_event_intelligence_stores.py` 的契约测试。
   9. `EIL-104`：已将 `src/services/collector.py` 的采集主路径切换为 `collector -> article_normalizer -> article_repository -> article_feature_extractor`，并在写入成功后通过 legacy mirror 兼容写入旧 `raw_news`；同时补齐 `tests/test_collector.py` 对 article-first 顺序、feature failure 容错和 legacy mirror failure 容错的集成验证。
+  10. `EIL-105`：已新增 `src/services/semantic_deduper.py`，完成 cheap dedup（exact + near）与 semantic dedup 两段式流程，并将 exact / near / semantic 关系幂等写入 `article_dedup_links`；同时通过 `tests/test_semantic_deduper.py` 与 collector 集成测试固定 article-first 顺序和 dedup 容错行为。
+  11. `EIL-201`：已在 `src/services/event_builder.py` 落地事件候选检索与“加入已有事件 / 创建新事件”分流主路径，完成 `events` / `event_members` 写入与计数字段维护，并通过 `tests/test_event_builder.py` 固化 article-to-event 映射契约。
+  12. `EIL-202`：已新增 `src/services/event_state_machine.py`，并在 `src/services/event_builder.py` 中接入 embedding / 实体 / 区域 / 时间 / 冲突规则的多信号合并判定、`new|active|updated|escalating|stabilizing|resolved|dormant` 状态机和 `event_state_transitions` 审计写入；同时补齐 `tests/test_event_state_machine.py`、`tests/test_event_builder.py` 与 `tests/test_engine.py` 的迁移与接线测试。
 - 下一步:
-  1. `EIL-105`：补齐 `semantic_deduper` 的 cheap dedup + semantic dedup 主流程，并把 exact / near / semantic 关系写入 `article_dedup_links`。
-  2. 做一轮带真实 PostgreSQL / Redis / Qdrant 的本地联调，确认 schema bootstrap、store health、repository 读写以及 article feature / vector write 边界在真实依赖下正常工作。
-  3. 继续扩大 `collector` 到 repository / feature extractor 的集成回归范围，覆盖更多真实依赖和重复写入场景。
+  1. `EIL-203`：实现 `event_enrichment`，把事件成员层的 regions / entities / assets / market channels 聚合到事件对象，并显式保留 supporting / contradicting sources。
+  2. `EIL-204`：补齐事件检索、状态回放和调试接口，为评估与人工 review 提供统一查询入口。
+  3. 做一轮带真实 PostgreSQL / Redis / Qdrant 的本地联调，确认 schema bootstrap、store health、repository 读写以及 article feature / vector write / event transition 边界在真实依赖下正常工作。
 
 ---
 
@@ -284,7 +287,7 @@
 - 验证记录:
   1. `uv run pytest tests/test_event_builder.py tests/test_semantic_deduper.py tests/test_event_intelligence_repositories.py` 通过（15 passed）。
 
-### [ ] EIL-202: 事件合并判定与状态机迁移
+### [x] EIL-202: 事件合并判定与状态机迁移
 
 - 主要模块: `src/services/event_builder.py`、`src/services/event_state_machine.py`
 - 主要工作:
@@ -299,6 +302,14 @@
 - 验收标准:
   1. same-event pair 标注集上合并结果达到目标区间。
   2. 每次状态变化均有可审计记录。
+- 当前实现说明:
+  1. `src/services/event_state_machine.py` 已新增确定性状态机：覆盖 `new / active / updated / escalating / stabilizing / resolved / dormant` 迁移判断，并暴露独立的 dormancy 评估入口。
+  2. `src/services/event_builder.py` 已从单一标题相似度升级为多信号合并判定：综合标题、embedding 近邻、实体重叠、区域重叠、时间邻近度和动作冲突规则来决定“并入既有事件 / 新建事件”。
+  3. 事件创建路径会写入 `event_state_transitions` 的初始 `new` 迁移；既有事件在 `active / updated / escalating / stabilizing / resolved` 之间发生变化时，也会记录带 merge signal 摘要的审计日志。
+  4. `src/engine.py` 已在 runtime wiring 中为 `EventBuilder` 注入 vector store，确保 ingestion 主路径能直接复用 article embedding 做事件合并判定。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_event_state_machine.py tests/test_event_builder.py tests/test_engine.py` 通过（18 passed）。
+  2. `.venv/bin/pytest tests/test_collector.py tests/test_semantic_deduper.py tests/test_event_intelligence_repositories.py` 通过（20 passed）。
 
 ### [ ] EIL-203: `event_enrichment` 结构化标签聚合
 
