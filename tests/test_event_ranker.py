@@ -254,7 +254,7 @@ async def test_event_ranker_ranks_high_impact_event_above_low_value_single_sourc
 
     assert [item["event_id"] for item in ranked] == ["evt_high", "evt_low"]
     assert ranked[0]["total_score"] > ranked[1]["total_score"]
-    assert query_service.list_calls[0]["limit"] == 5
+    assert query_service.list_calls[0]["limit"] == 500
     mock_log_metrics.assert_called_once()
     logged_metrics = mock_log_metrics.call_args.args[2]
     assert logged_metrics["events_considered"] == 2

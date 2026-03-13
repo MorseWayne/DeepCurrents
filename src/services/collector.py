@@ -238,19 +238,21 @@ class RSSCollector:
                     summary = raw_summary if isinstance(raw_summary, str) else ""
                     final_content = summary
 
-                    # 高优源尝试全文提取
-                    if source.tier <= 2:
+                    if source.tier <= 3 or len(final_content) < 100:
                         extract_proxy = resolve_request_proxy(link, CONFIG.https_proxy)
-                        extracted = await Extractor.extract(
-                            link, session=active_session, proxy=extract_proxy
-                        )
-                        extracted_content = (
-                            extracted.get("content", "") if extracted else ""
-                        )
-                        if isinstance(extracted_content, str) and len(
-                            extracted_content
-                        ) > len(final_content):
-                            final_content = extracted_content
+                        try:
+                            extracted = await Extractor.extract(
+                                link, session=active_session, proxy=extract_proxy
+                            )
+                            extracted_content = (
+                                extracted.get("content", "") if extracted else ""
+                            )
+                            if isinstance(extracted_content, str) and len(
+                                extracted_content
+                            ) > len(final_content):
+                                final_content = extracted_content
+                        except Exception:
+                            pass
 
                     raw_published = entry.get("published") or entry.get("updated")
                     published = (

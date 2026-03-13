@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, cast
 from .config.settings import CONFIG
 from .services.collector import RSSCollector
 from .services.ai_service import AIService
+from .services.translator import translate_event_briefs
 from .services.prediction_repository import PredictionRepository
 from .services.scorer import PredictionScorer
 from .services.notifier import Notifier
@@ -42,6 +43,8 @@ class DeepCurrentsEngine:
         self._report_run_tracker: Any = None
         self._report_context_builder: Any = None
         self._report_orchestrator: Any = None
+        self._event_ranker: Any = None
+        self._event_summarizer: Any = None
         self._report_profile = CONFIG.event_intelligence_report_profile
         self._runtime_ready = False
 
@@ -199,6 +202,8 @@ class DeepCurrentsEngine:
             self._report_run_tracker = report_run_tracker
             self._report_context_builder = report_context_builder
             self._report_orchestrator = report_orchestrator
+            self._event_ranker = event_ranker
+            self._event_summarizer = event_summarizer
             self._report_profile = config.report_profile or self._report_profile
         except Exception as exc:
             self._clear_event_intelligence_reporting()
@@ -209,6 +214,8 @@ class DeepCurrentsEngine:
         self._report_run_tracker = None
         self._report_context_builder = None
         self._report_orchestrator = None
+        self._event_ranker = None
+        self._event_summarizer = None
         self._report_profile = CONFIG.event_intelligence_report_profile
 
     async def start(self):
@@ -363,6 +370,55 @@ class DeepCurrentsEngine:
                 error=str(e),
             )
             logger.error(f"研报生成任务失败: {e}")
+            return None
+
+    async def send_core_events(
+        self,
+        *,
+        skip_push: bool = False,
+        force: bool = False,
+        translate: bool = True,
+        event_limit: int = 12,
+        evidence_limit: int = 4,
+    ):
+        """独立排序核心事件并推送到飞书（不生成研报）"""
+        profile = self._report_profile
+        try:
+            if self._event_summarizer is None:
+                logger.warning("Event Intelligence 未就绪，跳过事件推送。")
+                return None
+
+            since = None if force else await self._resolve_last_report_since(profile)
+            event_briefs = await self._event_summarizer.summarize_ranked_events(
+                statuses=REPORT_EVENT_STATUSES,
+                since=since,
+                profile=profile,
+                limit=event_limit,
+                evidence_limit=evidence_limit,
+            )
+
+            if not event_briefs:
+                logger.info("没有新的核心事件需要推送。")
+                return []
+
+            logger.info(f"已整理 {len(event_briefs)} 个核心事件")
+
+            if translate:
+                event_briefs = await translate_event_briefs(event_briefs)
+
+            if not skip_push:
+                report_date = datetime.now(UTC).strftime("%Y-%m-%d")
+                await self.notifier.deliver_events(
+                    event_briefs,
+                    report_date=report_date,
+                )
+                logger.info("✅ 核心事件速报推送完成。")
+            else:
+                logger.info("已跳过事件推送。")
+
+            return event_briefs
+        except Exception as e:
+            logger.error(f"核心事件推送失败: {e}")
             return None
 
     async def _resolve_last_report_since(self, profile: str) -> datetime | None:

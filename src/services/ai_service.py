@@ -4,6 +4,7 @@ import re
 import time
 from datetime import date, datetime, timezone
 from typing import Dict, Any, Optional, Literal, Tuple, List
+import httpx
 from openai import AsyncOpenAI
 from ..config.settings import CONFIG
 from ..config.asset_symbols import resolve_asset_symbol, get_default_market_symbols
@@ -40,6 +41,8 @@ MODEL_CONTEXT_WINDOW_FALLBACKS: Dict[str, int] = {
     "gpt-5": 400000,
     "gpt-5-mini": 400000,
     "gpt-5-nano": 400000,
+    "gpt-5.4": 400000,
+    "gpt-5.4-mini": 400000,
 }
 WINDOW_FIELD_CANDIDATES = (
     "context_window",
@@ -378,6 +381,187 @@ class AIService:
 
         return normalized
 
+    def _normalize_text_list_items(self, value: Any, *, max_items: int = 4) -> List[str]:
+        items = value if isinstance(value, list) else [value]
+        normalized: List[str] = []
+        for item in items:
+            text = self._to_text(item)
+            if not text:
+                continue
+            normalized.append(text)
+            if len(normalized) >= max_items:
+                break
+        return normalized
+
+    def _normalize_macro_transmission_steps(self, value: Any) -> List[Dict[str, str]]:
+        steps = value if isinstance(value, list) else []
+        normalized: List[Dict[str, str]] = []
+
+        for raw_item in steps:
+            if isinstance(raw_item, dict):
+                stage = (
+                    self._to_text(raw_item.get("stage"))
+                    or self._to_text(raw_item.get("name"))
+                    or self._to_text(raw_item.get("step"))
+                    or "链路节点"
+                )
+                driver = (
+                    self._to_text(raw_item.get("driver"))
+                    or self._to_text(raw_item.get("description"))
+                    or self._to_text(raw_item.get("content"))
+                    or self._to_text(raw_item.get("impact"))
+                    or self._to_text(raw_item.get("detail"))
+                )
+            else:
+                stage = "链路节点"
+                driver = self._to_text(raw_item)
+
+            if not driver:
+                continue
+            normalized.append({"stage": stage, "driver": driver})
+
+        return normalized
+
+    def _normalize_macro_transmission_chain(self, value: Any) -> Optional[Dict[str, Any]]:
+        item = value if isinstance(value, dict) else {}
+        if not item:
+            return None
+
+        headline = (
+            self._to_text(item.get("headline"))
+            or self._to_text(item.get("coreThesis"))
+            or self._to_text(item.get("summary"))
+            or self._to_text(item.get("title"))
+        )
+        shock_source = (
+            self._to_text(item.get("shockSource"))
+            or self._to_text(item.get("primaryShock"))
+            or self._to_text(item.get("shock"))
+            or self._to_text(item.get("driver"))
+        )
+        macro_variables = self._normalize_text_list_items(
+            item.get("macroVariables") or item.get("keyDrivers"),
+            max_items=4,
+        )
+        market_pricing = (
+            self._to_text(item.get("marketPricing"))
+            or self._to_text(item.get("pricing"))
+            or self._to_text(item.get("marketImpact"))
+        )
+        allocation_implication = (
+            self._to_text(item.get("allocationImplication"))
+            or self._to_text(item.get("portfolioImplication"))
+            or self._to_text(item.get("allocation"))
+        )
+        steps = self._normalize_macro_transmission_steps(
+            item.get("steps") or item.get("transmissionSteps")
+        )
+        timeframe = self._to_text(item.get("timeframe") or item.get("horizon")) or None
+        confidence = self._normalize_confidence(item.get("confidence"))
+
+        if not steps:
+            if shock_source:
+                steps.append({"stage": "冲击源", "driver": shock_source})
+            if macro_variables:
+                steps.append(
+                    {
+                        "stage": "宏观变量",
+                        "driver": "、".join(macro_variables[:3]),
+                    }
+                )
+            if market_pricing:
+                steps.append({"stage": "市场定价", "driver": market_pricing})
+            if allocation_implication:
+                steps.append({"stage": "配置含义", "driver": allocation_implication})
+
+        if not any([headline, shock_source, macro_variables, market_pricing, allocation_implication, steps]):
+            return None
+
+        if not headline:
+            headline = (
+                shock_source
+                or market_pricing
+                or allocation_implication
+                or "当前主线正在驱动跨资产再定价。"
+            )
+
+        normalized: Dict[str, Any] = {
+            "headline": headline,
+            "macroVariables": macro_variables,
+            "steps": steps,
+        }
+        if shock_source:
+            normalized["shockSource"] = shock_source
+        if market_pricing:
+            normalized["marketPricing"] = market_pricing
+        if allocation_implication:
+            normalized["allocationImplication"] = allocation_implication
+        if timeframe:
+            normalized["timeframe"] = timeframe
+        if confidence is not None:
+            normalized["confidence"] = confidence
+        return normalized
+
+    def _normalize_asset_transmission_breakdowns(self, value: Any) -> List[Dict[str, Any]]:
+        breakdowns = value if isinstance(value, list) else [value] if isinstance(value, dict) else []
+        normalized: List[Dict[str, Any]] = []
+
+        for raw_item in breakdowns:
+            item = raw_item if isinstance(raw_item, dict) else {"coreView": self._to_text(raw_item)}
+            asset_class = (
+                self._to_text(item.get("assetClass"))
+                or self._to_text(item.get("asset"))
+                or self._to_text(item.get("theme"))
+                or self._to_text(item.get("sector"))
+                or "Macro Basket"
+            )
+            trend = self._normalize_trend(item.get("trend"))
+            core_view = (
+                self._to_text(item.get("coreView"))
+                or self._to_text(item.get("rationale"))
+                or self._to_text(item.get("reason"))
+                or self._to_text(item.get("summary"))
+            )
+            transmission_path = (
+                self._to_text(item.get("transmissionPath"))
+                or self._to_text(item.get("path"))
+                or self._to_text(item.get("chain"))
+                or self._to_text(item.get("rationale"))
+            )
+            key_drivers = self._normalize_text_list_items(
+                item.get("keyDrivers") or item.get("drivers"),
+                max_items=4,
+            )
+            watch_signals = self._normalize_text_list_items(
+                item.get("watchSignals") or item.get("watchpoints") or item.get("signals"),
+                max_items=4,
+            )
+            timeframe = self._to_text(item.get("timeframe") or item.get("horizon")) or None
+            confidence = self._normalize_confidence(item.get("confidence"))
+
+            if not core_view and transmission_path:
+                core_view = transmission_path
+            if not transmission_path and core_view:
+                transmission_path = core_view
+            if not core_view and not transmission_path:
+                continue
+
+            normalized_item: Dict[str, Any] = {
+                "assetClass": asset_class,
+                "trend": trend,
+                "coreView": core_view or "该资产正在表达当前主线。",
+                "transmissionPath": transmission_path or "事件主线 -> 宏观变量 -> 资产定价",
+                "keyDrivers": key_drivers,
+                "watchSignals": watch_signals,
+            }
+            if timeframe:
+                normalized_item["timeframe"] = timeframe
+            if confidence is not None:
+                normalized_item["confidence"] = confidence
+            normalized.append(normalized_item)
+
+        return normalized
+
     def _normalize_report_date(self, value: Any) -> str:
         fallback = datetime.now(timezone.utc).date().isoformat()
         text = self._to_text(value)
@@ -431,6 +615,15 @@ class AIService:
             "executiveSummary": executive_summary,
             "globalEvents": self._normalize_global_events(data.get("globalEvents") or data.get("majorEvents")),
             "economicAnalysis": economic_analysis,
+            "macroTransmissionChain": self._normalize_macro_transmission_chain(
+                data.get("macroTransmissionChain")
+                or data.get("macroTransmission")
+                or data.get("macroChain")
+            ),
+            "assetTransmissionBreakdowns": self._normalize_asset_transmission_breakdowns(
+                data.get("assetTransmissionBreakdowns")
+                or data.get("assetBreakdowns")
+            ),
             "investmentTrends": self._normalize_investment_trends(data.get("investmentTrends")),
         }
         if agent_insights:
@@ -521,7 +714,13 @@ class AIService:
         for provider in providers:
             window = await self._fetch_provider_model_window(provider)
             windows[f"{provider['name']}:{provider['model']}"] = window
-        return min(windows.values()), windows
+        raw_window = min(windows.values())
+        capped_window = min(raw_window, CONFIG.ai_max_context_tokens)
+        if capped_window < raw_window:
+            logger.debug(
+                f"上下文窗口已按 AI_MAX_CONTEXT_TOKENS 限制: {raw_window} -> {capped_window}"
+            )
+        return capped_window, windows
 
     def _compute_input_budget(self, context_window: int) -> Dict[str, int]:
         reserve = int(context_window * OUTPUT_RESERVE_RATIO)
@@ -659,7 +858,8 @@ class AIService:
         schema_hint = (
             "必须保留/补全字段: "
             "date(string), intelligenceDigest(array), executiveSummary(string), "
-            "globalEvents(array), economicAnalysis(string), investmentTrends(array)。"
+            "macroTransmissionChain(object), globalEvents(array), economicAnalysis(string), "
+            "assetTransmissionBreakdowns(array), investmentTrends(array)。"
             "可选字段: agentInsights(object), riskAssessment(string), sourceAnalysis(string)。"
         )
         safe_raw = truncate_to_token_budget(broken_raw, max_tokens=4000)
@@ -688,6 +888,8 @@ class AIService:
             try:
                 # 重新初始化 client 以支持不同 provider 的 base_url
                 client = AsyncOpenAI(api_key=p["key"], base_url=self._provider_base_url(p["url"]))
+                read_timeout = CONFIG.ai_timeout_ms / 1000
+                timeout = httpx.Timeout(timeout=read_timeout, connect=10.0)
                 response = await client.chat.completions.create(
                     model=p["model"],
                     messages=[
@@ -695,7 +897,7 @@ class AIService:
                         {"role": "user", "content": user_content}
                     ],
                     response_format={"type": "json_object"} if use_json else None,
-                    timeout=CONFIG.ai_timeout_ms / 1000
+                    timeout=timeout
                 )
                 logger.info(f"{name} 调用成功 (Model: {p['model']})")
                 return response.choices[0].message.content or ""

@@ -105,7 +105,7 @@ class EventRepository:
         *,
         statuses: Sequence[str] | None = None,
         since: datetime | None = None,
-        limit: int = 100,
+        limit: int = 500,
     ) -> list[dict[str, Any]]:
         pool = ensure_pool(self._pool)
         conditions: list[str] = []
@@ -129,7 +129,11 @@ class EventRepository:
         query = "SELECT * FROM events"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += f" ORDER BY COALESCE(latest_article_at, updated_at) DESC NULLS LAST, created_at DESC LIMIT ${limit_index}"
+        query += (
+            f" ORDER BY article_count DESC, source_count DESC, "
+            f"COALESCE(latest_article_at, updated_at) DESC NULLS LAST, "
+            f"created_at DESC LIMIT ${limit_index}"
+        )
         rows = await pool.fetch(query, *values)
         return normalize_rows(rows, json_field_names=self._EVENT_JSON_FIELDS)
 

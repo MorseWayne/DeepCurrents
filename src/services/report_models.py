@@ -5,6 +5,33 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class MacroTransmissionStep(BaseModel):
+    stage: str
+    driver: str
+
+
+class MacroTransmissionChain(BaseModel):
+    headline: str
+    shockSource: Optional[str] = None
+    macroVariables: List[str] = Field(default_factory=list)
+    marketPricing: Optional[str] = None
+    allocationImplication: Optional[str] = None
+    steps: List[MacroTransmissionStep] = Field(default_factory=list)
+    timeframe: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0, le=100)
+
+
+class AssetTransmissionBreakdown(BaseModel):
+    assetClass: str
+    trend: Literal["Bullish", "Bearish", "Neutral"]
+    coreView: str
+    transmissionPath: str
+    keyDrivers: List[str] = Field(default_factory=list)
+    watchSignals: List[str] = Field(default_factory=list)
+    timeframe: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0, le=100)
+
+
 class GlobalEvent(BaseModel):
     title: str
     detail: str
@@ -60,8 +87,10 @@ class DailyReport(BaseModel):
     date: str
     intelligenceDigest: List[IntelligenceItem]
     executiveSummary: str
+    macroTransmissionChain: Optional[MacroTransmissionChain] = None
     globalEvents: List[GlobalEvent]
     economicAnalysis: str
+    assetTransmissionBreakdowns: Optional[List[AssetTransmissionBreakdown]] = None
     investmentTrends: List[InvestmentTrend]
     agentInsights: Optional[AgentInsights] = None
     riskAssessment: Optional[str] = None
@@ -70,11 +99,14 @@ class DailyReport(BaseModel):
 
 __all__ = [
     "AgentInsights",
+    "AssetTransmissionBreakdown",
     "DailyReport",
     "GlobalEvent",
     "IntelligenceItem",
     "IntelSource",
     "InvestmentTrend",
     "MacroAnalystOutput",
+    "MacroTransmissionChain",
+    "MacroTransmissionStep",
     "SentimentAnalystOutput",
 ]

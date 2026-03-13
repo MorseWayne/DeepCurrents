@@ -167,7 +167,7 @@ class EventRepositoryLike(Protocol):
         *,
         statuses: Sequence[str] | None = None,
         since: datetime | None = None,
-        limit: int = 100,
+        limit: int = 500,
     ) -> list[dict[str, Any]]: ...
 
     async def create_event(self, event: Mapping[str, Any]) -> dict[str, Any]: ...
@@ -230,8 +230,8 @@ class EventBuilder:
             "escalating",
             "stabilizing",
         ),
-        merge_score_threshold: float = 0.58,
-        semantic_score_threshold: float = 0.75,
+        merge_score_threshold: float = 0.45,
+        semantic_score_threshold: float = 0.60,
         semantic_limit: int = 12,
         vector_collection: str = "article_features",
     ):

@@ -1,6 +1,5 @@
 import asyncio
 import argparse
-import sys
 import json
 import os
 from src.engine import DeepCurrentsEngine
@@ -9,20 +8,74 @@ from src.utils.logger import get_logger
 logger = get_logger("run-report")
 
 
+async def run_events(args):
+    engine = DeepCurrentsEngine()
+    await engine.bootstrap_runtime()
+
+    try:
+        if not args.report_only:
+            await engine.collect_data()
+
+        event_briefs = await engine.send_core_events(
+            skip_push=args.no_push,
+            force=args.force,
+            translate=not args.no_translate,
+        )
+
+        if not event_briefs:
+            print("\n--- 未检测到核心事件 ---")
+            return
+
+        if args.json:
+            output_text = json.dumps(
+                [_brief_to_dict(b) for b in event_briefs],
+                indent=2,
+                ensure_ascii=False,
+            )
+        else:
+            lines = [f"# 🔥 核心事件速报 (共 {len(event_briefs)} 个)\n"]
+            for i, brief in enumerate(event_briefs):
+                bj = brief.get("brief_json", brief) if isinstance(brief, dict) else {}
+                title = bj.get("canonicalTitle", "")
+                state = bj.get("stateChange", "")
+                score = bj.get("totalScore", 0)
+                why = bj.get("whyItMatters", "")
+                lines.append(f"{i+1}. [{state}] {title} (score={score:.3f})")
+                if why:
+                    lines.append(f"   {why}")
+                lines.append("")
+            output_text = "\n".join(lines)
+
+        if args.output:
+            os.makedirs(
+                os.path.dirname(args.output) if os.path.dirname(args.output) else ".",
+                exist_ok=True,
+            )
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(output_text)
+            print(f"\n✅ 事件速报已写入: {args.output}")
+        else:
+            print("\n" + "=" * 50)
+            print(output_text)
+            print("=" * 50)
+
+    except Exception as e:
+        logger.error(f"事件速报生成失败: {e}")
+    finally:
+        await engine.stop()
+
+
 async def run_report(args):
     engine = DeepCurrentsEngine()
     await engine.bootstrap_runtime()
 
     try:
-        # 1. 采集数据（除非指定 --report-only）
         if not args.report_only:
             await engine.collect_data()
 
-        # 2. 生成研报
-        # 注意：如果指定了 --no-push，则不推送；如果指定了 --no-push，通常也建议 --no-mark
         report = await engine.generate_and_send_report(
             skip_push=args.no_push,
-            skip_mark=args.no_push,  # 预览模式通常不标记已读
+            skip_mark=args.no_push,
             force=args.force,
         )
 
@@ -30,13 +83,11 @@ async def run_report(args):
             print("\n--- 未能生成研报（可能无新数据） ---")
             return
 
-        # 3. 输出处理
         report_dict = report.model_dump()
 
         if args.json:
             output_text = json.dumps(report_dict, indent=2, ensure_ascii=False)
         else:
-            # 格式化 Markdown 输出
             lines = [
                 f"# 🌊 DeepCurrents Daily Report ({report.date})",
                 f"\n## 核心主线\n{report.executiveSummary}",
@@ -47,7 +98,6 @@ async def run_report(args):
                 lines.append(f"- **{t.assetClass}**: {t.trend} | {t.rationale}")
             output_text = "\n".join(lines)
 
-        # 写入文件或打印
         if args.output:
             os.makedirs(
                 os.path.dirname(args.output) if os.path.dirname(args.output) else ".",
@@ -67,8 +117,20 @@ async def run_report(args):
         await engine.stop()
 
 
+def _brief_to_dict(brief):
+    if isinstance(brief, dict):
+        bj = brief.get("brief_json", brief)
+        return dict(bj) if isinstance(bj, dict) else brief
+    return {}
+
+
 def main():
     parser = argparse.ArgumentParser(description="DeepCurrents 研报命令行工具 (v2.2)")
+    parser.add_argument(
+        "--events-only",
+        action="store_true",
+        help="仅推送核心事件速报（不生成研报）",
+    )
     parser.add_argument(
         "--report-only", action="store_true", help="仅用已有数据生成（跳过采集）"
     )
@@ -80,11 +142,19 @@ def main():
         action="store_true",
         help="强制生成：忽略最近一次报告时间窗口（仍仅使用现有数据）",
     )
+    parser.add_argument(
+        "--no-translate",
+        action="store_true",
+        help="事件速报不翻译（保留英文原文）",
+    )
     parser.add_argument("--json", action="store_true", help="以 JSON 格式输出")
-    parser.add_argument("--output", "-o", type=str, help="将研报保存到指定文件")
+    parser.add_argument("--output", "-o", type=str, help="将输出保存到指定文件")
 
     args = parser.parse_args()
-    asyncio.run(run_report(args))
+    if args.events_only:
+        asyncio.run(run_events(args))
+    else:
+        asyncio.run(run_report(args))
 
 
 if __name__ == "__main__":

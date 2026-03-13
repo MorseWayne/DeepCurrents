@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     # ── Cron 调度 ──
     cron_collect: str = Field(default="0 * * * *", validation_alias="CRON_COLLECT")
     cron_report: str = Field(default="0 8 * * *", validation_alias="CRON_REPORT")
+    cron_events: str = Field(default="", validation_alias="CRON_EVENTS")
     cron_cleanup: str = Field(default="0 3 * * *", validation_alias="CRON_CLEANUP")
 
     # ── RSS 采集 ──
@@ -121,6 +122,10 @@ class Settings(BaseSettings):
     feishu_webhook: str = Field(default="", validation_alias="FEISHU_WEBHOOK")
     telegram_bot_token: str = Field(default="", validation_alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", validation_alias="TELEGRAM_CHAT_ID")
+
+    # ── 翻译 API（事件速报英→中，二选一） ──
+    deepl_api_key: str = Field(default="", validation_alias="DEEPL_API_KEY")
+    libretranslate_url: str = Field(default="", validation_alias="LIBRETRANSLATE_URL")
 
     # ── 日志 ──
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")

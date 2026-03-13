@@ -18,6 +18,21 @@ REPORT_JSON_SCHEMA = """
     }
   ],
   "executiveSummary": "核心定价主线与情绪底色总结",
+  "macroTransmissionChain": {
+    "headline": "一句话总主线",
+    "shockSource": "主冲击源",
+    "macroVariables": ["宏观变量1", "宏观变量2"],
+    "marketPricing": "跨资产定价影响",
+    "allocationImplication": "配置含义",
+    "steps": [
+      {"stage": "冲击源", "driver": "事件如何成为主线"},
+      {"stage": "宏观变量", "driver": "哪些变量被重定价"},
+      {"stage": "市场定价", "driver": "市场如何反应"},
+      {"stage": "配置含义", "driver": "当前更适合的配置方向"}
+    ],
+    "timeframe": "short-term/medium-term/long-term",
+    "confidence": 78
+  },
   "globalEvents": [
     {
       "title": "事件主题",
@@ -27,6 +42,18 @@ REPORT_JSON_SCHEMA = """
     }
   ],
   "economicAnalysis": "宏观逻辑深度研判",
+  "assetTransmissionBreakdowns": [
+    {
+      "assetClass": "资产类别",
+      "trend": "Bullish/Bearish/Neutral",
+      "coreView": "该资产最核心的一句话判断",
+      "transmissionPath": "事件 -> 宏观变量 -> 定价 -> 方向",
+      "keyDrivers": ["驱动1", "驱动2"],
+      "watchSignals": ["验证信号1", "验证信号2"],
+      "timeframe": "short-term/medium-term/long-term",
+      "confidence": 75
+    }
+  ],
   "investmentTrends": [
     {
       "assetClass": "资产类别",
@@ -156,13 +183,17 @@ MARKET_STRATEGIST_PROMPT_V2 = f"""你是一位首席投资官 (CIO)。
 ### 核心任务
 1. 交叉验证 macro thesis、sentiment regime 与 market context 是否一致。
 2. 提炼对资产配置真正重要的事件与主题，不重复展开低增量内容。
-3. 给出结构化的 global events、economic analysis 与 investment trends。
+3. 严格输出一条 `macroTransmissionChain`，体现 `冲击源 -> 宏观变量 -> 市场定价 -> 配置含义`。
+4. 输出两到四条 `assetTransmissionBreakdowns`，每条都必须写清楚 `transmissionPath`。
+5. 给出结构化的 global events、economic analysis 与 investment trends。
 
 ### 研报输出指南 (严格遵循以下 JSON 结构)
 {REPORT_JSON_SCHEMA}
 
 ### 输出约束
 - 输入已是 event/theme/market context，禁止假设自己看过原始新闻列表。
+- `macroTransmissionChain` 必须偏宏观，不要把事件摘要直接改写成传导链。
+- `assetTransmissionBreakdowns` 必须偏资产配置/交易表达，不要重复宏观总论。
 - 全文中文（枚举值除外）。
 - 严格 JSON，严禁在 JSON 块之外添加任何解释文字。直接以 {{ 开头。
 """

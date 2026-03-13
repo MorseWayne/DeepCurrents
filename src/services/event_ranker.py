@@ -44,7 +44,7 @@ class EventRepositoryLike(Protocol):
         *,
         statuses: Sequence[str] | None = None,
         since: datetime | None = None,
-        limit: int = 100,
+        limit: int = 500,
     ) -> list[dict[str, Any]]: ...
 
     async def upsert_event_score(self, score: Mapping[str, Any]) -> dict[str, Any]: ...
@@ -64,7 +64,7 @@ class EventQueryLike(Protocol):
         statuses: Sequence[str] | None = None,
         since: datetime | None = None,
         theme: str | None = None,
-        limit: int = 100,
+        limit: int = 500,
     ) -> list[dict[str, Any]]: ...
 
 
@@ -124,6 +124,7 @@ class EventRanker:
         since: datetime | None = None,
         theme: str | None = None,
         limit: int = 100,
+        candidate_pool_size: int = 500,
         profile: str = "macro_daily",
     ) -> list[dict[str, Any]]:
         scoring_profile = get_scoring_profile(profile)
@@ -131,7 +132,7 @@ class EventRanker:
             statuses=statuses,
             since=since,
             theme=theme,
-            limit=limit,
+            limit=candidate_pool_size,
         )
         ranked: list[dict[str, Any]] = []
         for item in event_items:
@@ -405,12 +406,23 @@ class EventRanker:
             for name in self._extract_names(enrichment.get("market_channels"))
         }
         assets = self._extract_names(enrichment.get("assets"))
+        article_count = max(
+            self._safe_int(event.get("article_count")),
+            self._safe_int(enrichment.get("member_count")),
+        )
+        source_count = self._safe_int(event.get("source_count"))
 
         score = 0.1
         if event_type in HIGH_IMPACT_EVENT_TYPES:
             score += 0.25
         score += min(len(channels & HIGH_IMPACT_CHANNELS) * 0.15, 0.45)
         score += min(len(assets) * 0.05, 0.2)
+        if article_count >= 3:
+            score += 0.12
+        elif article_count >= 2:
+            score += 0.06
+        if source_count >= 2:
+            score += 0.05
         return round(min(score, 1.0), 3)
 
     def _novelty_score(
@@ -469,9 +481,17 @@ class EventRanker:
             supporting_sources * 0.25 + source_count * 0.1 + article_count * 0.04,
             1.0,
         )
+        if article_count >= 3:
+            score += 0.25
+        elif article_count >= 2:
+            score += 0.15
+        if source_count >= 3:
+            score += 0.15
+        elif source_count >= 2:
+            score += 0.08
         if contradicting_sources > 0:
             score = max(0.0, score - min(0.15 * contradicting_sources, 0.45))
-        return round(score, 3)
+        return round(min(score, 1.0), 3)
 
     async def _source_quality_score(
         self,
@@ -512,7 +532,7 @@ class EventRanker:
         )
         started_at = self._optional_datetime(event.get("started_at"))
 
-        score = min(article_count * 0.08, 0.45)
+        score = min(article_count * 0.12, 0.55)
         if started_at is not None and latest_article_at is not None:
             duration_hours = max(
                 1.0, (latest_article_at - started_at).total_seconds() / 3600
@@ -542,13 +562,23 @@ class EventRanker:
         supporting_sources = len(supporting_source_ids)
         unique_source_count = len(supporting_source_ids | contradicting_source_ids)
         source_count = max(self._safe_int(event.get("source_count")), unique_source_count)
+        article_count = max(
+            self._safe_int(event.get("article_count")),
+            self._safe_int(enrichment.get("member_count")),
+        )
 
         score = 0.0
         if source_count <= 1:
-            score += 0.45
+            score += 0.5
+        elif source_count == 2 and supporting_sources < 2:
+            score += 0.15
+        if article_count <= 1:
+            score += 0.1
         score += min(contradicting_sources * 0.3, 0.6)
         if supporting_sources == 0:
             score += 0.1
+        if source_count >= 3 and supporting_sources >= 2:
+            score = max(0.0, score - 0.15)
         return round(min(score, 1.0), 3)
 
     def _source_ids(self, items: Any) -> set[str]:

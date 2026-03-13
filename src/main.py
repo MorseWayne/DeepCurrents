@@ -31,6 +31,16 @@ async def main():
         replace_existing=True
     )
     
+    # 核心事件速报（独立于研报，可选启用）
+    if CONFIG.cron_events:
+        scheduler.add_job(
+            engine.send_core_events,
+            trigger=build_cron_trigger(CONFIG.cron_events, "CRON_EVENTS"),
+            id="send_core_events",
+            replace_existing=True,
+        )
+        logger.info(f"事件速报调度已启用: {CONFIG.cron_events}")
+
     # 研报生成
     scheduler.add_job(
         engine.generate_and_send_report,

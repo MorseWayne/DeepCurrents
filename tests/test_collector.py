@@ -158,7 +158,8 @@ async def test_fetch_source_bypasses_proxy_for_internal_rsshub_feed():
                 mock_rss_response(mock_get)
                 await collector.fetch_source(rsshub_source)
 
-    assert mock_get.call_args.kwargs["proxy"] is None
+    rss_fetch_call = mock_get.call_args_list[0]
+    assert rss_fetch_call.kwargs["proxy"] is None
 
 
 @pytest.mark.asyncio

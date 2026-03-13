@@ -19,7 +19,7 @@ class EventRepositoryLike(Protocol):
         *,
         statuses: Sequence[str] | None = None,
         since: datetime | None = None,
-        limit: int = 100,
+        limit: int = 500,
     ) -> list[dict[str, Any]]: ...
 
     async def list_event_members(self, event_id: str) -> list[dict[str, Any]]: ...
@@ -64,7 +64,7 @@ class EventQueryService:
         statuses: Sequence[str] | None = None,
         since: datetime | None = None,
         theme: str | None = None,
-        limit: int = 100,
+        limit: int = 500,
     ) -> list[dict[str, Any]]:
         if event_id:
             loaded = await self.event_repository.get_event(event_id)
