@@ -171,6 +171,7 @@ DeepCurrents 从多源 RSS / RSSHub 信息流中抓取文章，执行 article-fi
 ```bash
 uv pip install -r requirements.txt
 cp .env.example .env
+docker compose up -d postgres qdrant redis rsshub
 uv run -m src.main
 ```
 
@@ -182,7 +183,18 @@ uv run -m src.run_report --report-only --no-push
 uv run -m src.run_report --json
 ```
 
-### 5.3 运行前提
+说明:
+
+- `--report-only` 仅适用于 PostgreSQL 中已存在 event-intelligence 数据的场景。
+
+### 5.3 Compose 全栈
+
+```bash
+docker compose up -d --build
+docker compose logs -f deep-currents
+```
+
+### 5.4 运行前提
 
 正式主链路需要:
 

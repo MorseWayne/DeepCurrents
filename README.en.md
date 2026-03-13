@@ -28,6 +28,7 @@ DeepCurrents is an automated intelligence system that aggregates **70+ global so
 
 - **Python** >= 3.10
 - **uv** (Recommended) or pip
+- **Docker Engine / Docker Desktop + docker compose** (recommended for local PostgreSQL / Qdrant / Redis / RSSHub)
 - An AI API key compatible with the OpenAI interface
 - Event Intelligence runtime dependencies:
   - PostgreSQL
@@ -73,17 +74,97 @@ EVENT_INTELLIGENCE_REDIS_URL=redis://localhost:6379/0
 
 If `EVENT_INTELLIGENCE_ENABLED=false`, collection and report entrypoints stay fail-closed and do not fall back to the old article-level pipeline.
 
-### 4. Run
+### 4. Start Local Infrastructure
+
+```bash
+# Local development mode: infra in containers, app on the host
+docker compose up -d postgres qdrant redis rsshub
+docker compose ps
+```
+
+Host-mode defaults:
+
+- PostgreSQL: `localhost:5432`
+- Qdrant: `localhost:6333`
+- Redis: `localhost:6379`
+- RSSHub: `localhost:1200` (optional but strongly recommended)
+
+### 5. Run
 
 ```bash
 uv run -m src.main
 ```
 
-### 5. Test
+Manual report generation:
+
+```bash
+uv run -m src.run_report
+uv run -m src.run_report --no-push
+uv run -m src.run_report --report-only
+```
+
+`uv run -m src.run_report --report-only` only works if event-intelligence data already exists in PostgreSQL.
+
+### 6. Test
 
 ```bash
 uv run pytest
 ```
+
+---
+
+## 🐳 Local Deployment Modes
+
+DeepCurrents now has two supported local deployment paths.
+
+### Mode A: Host Development
+
+Use this when you want to edit Python code locally while keeping infrastructure containerized.
+
+```bash
+# 1. Start local infra
+docker compose up -d postgres qdrant redis rsshub
+
+# 2. Run the app on the host
+uv run -m src.main
+```
+
+Your `.env` should keep host addresses:
+
+```env
+EVENT_INTELLIGENCE_POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/deepcurrents
+EVENT_INTELLIGENCE_QDRANT_URL=http://localhost:6333
+EVENT_INTELLIGENCE_REDIS_URL=redis://localhost:6379/0
+RSSHUB_BASE_URL=http://localhost:1200
+```
+
+### Mode B: Full Stack via Compose
+
+Use this when you want a fully containerized local stack.
+
+```bash
+docker compose up -d --build
+docker compose logs -f deep-currents
+```
+
+Stop everything:
+
+```bash
+docker compose down
+```
+
+In full-stack compose mode, the `deep-currents` container automatically overrides runtime addresses to service names:
+
+- `postgresql://postgres:postgres@postgres:5432/deepcurrents`
+- `http://qdrant:6333`
+- `redis://redis:6379/0`
+- `http://rsshub:1200`
+
+### Important Runtime Behavior
+
+1. If `EVENT_INTELLIGENCE_ENABLED=false`, collection and report entrypoints stay fail-closed.
+2. If PostgreSQL / Qdrant / Redis are not reachable, the app will not fall back to the old article-level pipeline.
+3. `RSSHUB_BASE_URL` is not required for the core runtime, but it is strongly recommended for Telegram / Chinese extension feeds.
 
 ---
 
@@ -92,7 +173,7 @@ uv run pytest
 ```
                      ┌────────────────────┐
                      │    RSS Sources     │
-                     │   (35+ Global)     │
+                     │   (70+ Global)     │
                      └────────┬───────────┘
                               │ Hourly Ingestion
                               ▼
@@ -162,7 +243,7 @@ In addition to automated tests, this project provides a diagnostic tool `src/tes
 # Show help
 uv run python -m src.test_tools --help
 
-# Concurrently verify connectivity for all 35+ sources (RSS/RSSHub)
+# Concurrently verify connectivity for all 70+ sources (RSS/RSSHub)
 uv run python -m src.test_tools --rss
 
 # Test AI (LLM) service connectivity and response
@@ -193,7 +274,7 @@ Telegram (Bot API and RSS sources) might be restricted in some regions. Please n
 1.  **Notification Proxy**: This system has integrated `HTTPS_PROXY` support. If Telegram delivery fails, configure your proxy address (HTTP/HTTPS/SOCKS5 supported) in `.env`.
 2.  **RSSHub Tuning**: 
     - The public instance `rsshub.app` has strict rate limits for Telegram/Twitter and often returns 403.
-    - **Self-Hosting Recommended**: Start a local instance via `docker compose up -d rsshub redis`.
+    - **Self-Hosting Recommended**: Start the local infra stack via `docker compose up -d postgres qdrant redis rsshub` and make sure at least `rsshub + redis` are healthy.
     - **Configuration**: Set `RSSHUB_BASE_URL=http://localhost:1200` in `.env` to enable automatic URL rewriting.
 
 ---
@@ -205,7 +286,8 @@ Telegram (Bot API and RSS sources) might be restricted in some regions. Please n
 | **Language** | Python 3.10+ | Core language |
 | **Runtime** | asyncio | Non-blocking async runtime |
 | **AI SDK** | OpenAI Python SDK | Multi-provider support + structured JSON |
-| **Database** | aiosqlite | Async SQLite interaction |
+| **Primary Stores** | PostgreSQL + Qdrant + Redis | Event Intelligence runtime persistence, vector search, cache |
+| **Prediction Store** | SQLite | Local `predictions` persistence |
 | **Validation** | Pydantic v2 | Strict runtime type checking |
 | **Scheduling** | APScheduler | Robust task management |
 | **Logging** | Loguru | Modern structured logging |
