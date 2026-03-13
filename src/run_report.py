@@ -91,9 +91,30 @@ async def run_report(args):
             lines = [
                 f"# 🌊 DeepCurrents Daily Report ({report.date})",
                 f"\n## 核心主线\n{report.executiveSummary}",
-                f"\n## 宏观研判\n{report.economicAnalysis}",
-                "\n## 资产风向",
             ]
+            if report.macroTransmissionChain:
+                chain = report.macroTransmissionChain
+                lines.append("\n## 总主线传导链")
+                lines.append(f"- 主线: {chain.headline}")
+                if chain.shockSource:
+                    lines.append(f"- 冲击源: {chain.shockSource}")
+                if chain.macroVariables:
+                    lines.append(f"- 宏观变量: {'、'.join(chain.macroVariables[:4])}")
+                if chain.marketPricing:
+                    lines.append(f"- 市场定价: {chain.marketPricing}")
+                if chain.allocationImplication:
+                    lines.append(f"- 配置含义: {chain.allocationImplication}")
+                for idx, step in enumerate(chain.steps[:4], start=1):
+                    lines.append(f"  {idx}. {step.stage}: {step.driver}")
+            lines.append(f"\n## 宏观研判\n{report.economicAnalysis}")
+            if report.assetTransmissionBreakdowns:
+                lines.append("\n## 关键资产拆解")
+                for item in report.assetTransmissionBreakdowns[:4]:
+                    lines.append(
+                        f"- **{item.assetClass}**: {item.trend} | {item.coreView}"
+                    )
+                    lines.append(f"  传导路径: {item.transmissionPath}")
+            lines.append("\n## 资产风向")
             for t in report.investmentTrends:
                 lines.append(f"- **{t.assetClass}**: {t.trend} | {t.rationale}")
             output_text = "\n".join(lines)

@@ -101,6 +101,7 @@ class DeepCurrentsEngine:
             event_enrichment = EventEnrichmentService(
                 event_repository,
                 article_repository,
+                ai_service=self.ai,
             )
             event_builder = EventBuilder(
                 event_repository,
@@ -162,6 +163,7 @@ class DeepCurrentsEngine:
             event_enrichment = EventEnrichmentService(
                 event_repository,
                 article_repository,
+                ai_service=self.ai,
             )
             event_query_service = EventQueryService(
                 event_repository,
@@ -182,6 +184,7 @@ class DeepCurrentsEngine:
                 brief_repository,
                 event_query_service,
                 evidence_selector,
+                ai_service=self.ai,
             )
             theme_summarizer = ThemeSummarizer(
                 brief_repository,

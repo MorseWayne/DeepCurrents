@@ -229,11 +229,18 @@ class ArticleRepositoryLike(Protocol):
     async def get_article_features(self, article_id: str) -> dict[str, Any] | None: ...
 
 
+class AIServiceLike(Protocol):
+    async def call_agent(
+        self, name: str, system_prompt: str, user_content: str, use_json: bool = True
+    ) -> str: ...
+
+
 class EventEnrichmentService:
     def __init__(
         self,
         event_repository: EventRepositoryLike,
         article_repository: ArticleRepositoryLike,
+        ai_service: AIServiceLike | None = None,
         *,
         max_entities: int = 12,
         max_regions: int = 8,
@@ -242,6 +249,7 @@ class EventEnrichmentService:
     ):
         self.event_repository = event_repository
         self.article_repository = article_repository
+        self.ai_service = ai_service
         self.max_entities = max_entities
         self.max_regions = max_regions
         self.max_assets = max_assets
@@ -253,6 +261,8 @@ class EventEnrichmentService:
         *,
         event: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        from .prompts import EVENT_ENRICHMENT_PROMPT, build_event_enrichment_input
+
         event_row = dict(event or await self.event_repository.get_event(event_id) or {})
         if not event_row:
             raise ValueError(f"event not found: {event_id}")
@@ -268,6 +278,35 @@ class EventEnrichmentService:
             full_text,
         ) = await self._aggregate_members(members)
 
+        # 混合模式：规则打底，LLM 增强
+        llm_metadata = {}
+        if self.ai_service:
+            try:
+                llm_input = build_event_enrichment_input(
+                    title=self._text(event_row.get("canonical_title")),
+                    facts=[m["actions"] for m in member_contexts if m.get("actions")],
+                )
+                raw_json = await self.ai_service.call_agent(
+                    "EventEnrichment",
+                    EVENT_ENRICHMENT_PROMPT,
+                    llm_input,
+                    use_json=True,
+                )
+                llm_metadata = json.loads(raw_json)
+                
+                # 合并 LLM 提取的标的
+                for asset in llm_metadata.get("affectedAssets", []):
+                    ticker = asset.get("ticker")
+                    if ticker and ticker not in [a["name"] for a in assets]:
+                        assets.append({"name": ticker, "count": 1, "reason": asset.get("reason")})
+                
+                # 合并 LLM 提取的频道
+                for channel in llm_metadata.get("marketChannels", []):
+                    if channel not in [c["name"] for c in channels]:
+                        channels.append({"name": channel, "count": 1})
+            except Exception as e:
+                logger.warning(f"LLM enrichment failed for {event_id}, using rules only: {e}")
+
         last_transition = dict(transitions[-1]) if transitions else {}
         contradicting_article_ids = self._contradicting_article_ids(transitions)
         dominant_actions = self._dominant_actions(
@@ -279,7 +318,7 @@ class EventEnrichmentService:
             contradicting_article_ids=contradicting_article_ids,
             dominant_actions=dominant_actions,
         )
-        event_type = self._infer_event_type(full_text, channels)
+        event_type = llm_metadata.get("eventType") or self._infer_event_type(full_text, channels)
         primary_region = regions[0]["name"] if regions else self._text(
             event_row.get("primary_region")
         )
@@ -295,6 +334,7 @@ class EventEnrichmentService:
             "member_count": len(members),
             "source_count": len({item["source_id"] for item in supporting_sources + contradicting_sources}),
             "last_transition": self._serialize_transition(last_transition),
+            "llm_enhanced": bool(llm_metadata),
         }
 
         metadata = event_row.get("metadata")

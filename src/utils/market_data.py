@@ -115,6 +115,30 @@ EQUITY_SYMBOLS = {"^GSPC", "^IXIC", "^DJI", "SPY", "QQQ"}
 RATES_SYMBOLS = {"^TNX", "^IRX", "ZT=F", "ZF=F", "ZN=F", "ZB=F"}
 
 
+async def get_volatility_context() -> Dict[str, Any]:
+    """获取 VIX 及其背后的隐含波动率信号"""
+    vix = await get_market_price("^VIX")
+    regime = "Normal"
+    if vix["price"] > 30: regime = "Panic"
+    elif vix["price"] > 20: regime = "Elevated"
+    elif vix["price"] < 13: regime = "Complacent"
+    return {**vix, "regime": regime}
+
+
+async def get_yield_curve_context() -> Dict[str, Any]:
+    """获取 10Y-2Y 息差信号 (宏观定价核心锚点)"""
+    tnx = await get_market_price("^TNX") # 10Y
+    irx = await get_market_price("^IRX") # 13W (approx 2Y/3M proxy)
+    # yfinance often lacks direct 2Y-10Y, but we can compute or fetch specifically
+    # For simplicity here, we focus on TNX as proxy if others are missing
+    spread = round(tnx["price"] - irx["price"], 3) if tnx["price"] and irx["price"] else None
+    return {
+        "tnx": tnx["price"],
+        "spread": spread,
+        "inverted": spread < 0 if spread is not None else False
+    }
+
+
 def build_market_context_snapshot(
     prices: Sequence[Mapping[str, Any]],
     *,

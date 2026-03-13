@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 
 from src.services.ai_service import AIService, DailyReport, DEFAULT_CONTEXT_WINDOW
+from src.config.settings import CONFIG
 
 
 @pytest.fixture
@@ -78,6 +79,43 @@ def test_normalize_daily_report_payload_parses_datetime_text_date(
     assert normalized["date"] == "2026-03-14"
 
 
+def test_normalize_daily_report_payload_normalizes_transmission_fields(
+    mock_prediction_repository,
+):
+    ai_service = AIService(mock_prediction_repository)
+    normalized = ai_service.normalize_daily_report_payload(
+        {
+            "date": "2026-03-14",
+            "executiveSummary": "摘要",
+            "economicAnalysis": "分析",
+            "globalEvents": [],
+            "investmentTrends": [],
+            "intelligenceDigest": [],
+            "macroTransmissionChain": {
+                "coreThesis": "能源冲击正在重定价跨资产。",
+                "shock": "海峡通行风险上升",
+                "keyDrivers": ["能源供给预期", "通胀预期"],
+                "pricing": "原油偏强，风险资产承压。",
+                "allocation": "优先配置能源链。",
+            },
+            "assetTransmissionBreakdowns": [
+                {
+                    "asset": "Crude Oil",
+                    "trend": "建议偏多配置",
+                    "rationale": "供给扰动先推升原油风险溢价。",
+                    "watchpoints": ["海峡通行", "油价"],
+                }
+            ],
+        }
+    )
+
+    assert normalized["macroTransmissionChain"]["headline"] == "能源冲击正在重定价跨资产。"
+    assert normalized["macroTransmissionChain"]["shockSource"] == "海峡通行风险上升"
+    assert normalized["assetTransmissionBreakdowns"][0]["assetClass"] == "Crude Oil"
+    assert normalized["assetTransmissionBreakdowns"][0]["trend"] == "Bullish"
+    assert normalized["assetTransmissionBreakdowns"][0]["watchSignals"] == ["海峡通行", "油价"]
+
+
 @pytest.mark.asyncio
 async def test_resolve_shared_context_window_uses_min_provider_window(
     mock_prediction_repository,
@@ -95,7 +133,7 @@ async def test_resolve_shared_context_window_uses_min_provider_window(
             side_effect=[64000, 32000],
         ):
             baseline, windows = await ai_service._resolve_shared_context_window()
-            assert baseline == 32000
+            assert baseline == min(32000, CONFIG.ai_max_context_tokens)
             assert windows["Primary:m1"] == 64000
             assert windows["Fallback:m2"] == 32000
 

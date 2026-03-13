@@ -189,6 +189,22 @@ class ReportOrchestrator:
             sentiment_input=sentiment_input,
         )
 
+        # 注入增强的宏观因子 (Phase 3 另类数据增强)
+        enhanced_market_factors = ""
+        try:
+            from ..utils.market_data import get_volatility_context, get_yield_curve_context
+            vix_data = await get_volatility_context()
+            yield_data = await get_yield_curve_context()
+            enhanced_market_factors = (
+                f"\n[MACRO REGIME INDICATORS]\n"
+                f"- VIX (Volatility): {vix_data['price']} | Regime: {vix_data['regime']}\n"
+                f"- 10Y Rate: {yield_data['tnx']}%\n"
+                f"- Yield Curve (Proxy): {'INVERTED' if yield_data.get('inverted') else 'Normal'} (Spread: {yield_data.get('spread')})\n"
+            )
+            market_context_text += enhanced_market_factors
+        except Exception as e:
+            logger.warning(f"Failed to fetch enhanced macro factors: {e}")
+
         strategist_input, guard_stats = self._guard_strategist_input(
             context_text=combined_context_text,
             macro_out=macro_out,
@@ -202,17 +218,34 @@ class ReportOrchestrator:
             strategist_input,
             use_json=True,
         )
+        # Log the full raw output to ensure we can diagnose parsing or sparse issues
         logger.info(
-            "MarketStrategist raw output (first 800 chars): {}",
-            (final_raw or "")[:800],
+            f"MarketStrategist raw output (first 1000 chars):\n{final_raw[:1000] if final_raw else 'EMPTY'}"
         )
         if not final_raw or len(final_raw.strip()) < 20:
             logger.warning(
-                "MarketStrategist returned empty/minimal output (%d chars)",
+                "MarketStrategist returned empty/minimal output ({} chars)",
                 len(final_raw or ""),
             )
         parsed_json = await self.ai_service.parse_daily_report_json(final_raw)
-        report = DailyReport(**parsed_json)
+
+        # 引入 CRO 审核循环 (Phase 3 辩论机制)
+        final_report_json = parsed_json
+        from .prompts import RISK_MANAGER_PROMPT, build_risk_manager_input
+        try:
+            cro_input = build_risk_manager_input(parsed_json, market_context_text)
+            cro_raw = await self.ai_service.call_agent(
+                "RiskManager",
+                RISK_MANAGER_PROMPT,
+                cro_input,
+                use_json=True,
+            )
+            final_report_json = await self.ai_service.parse_daily_report_json(cro_raw)
+            logger.info("RiskManager (CRO) review completed and refined the report.")
+        except Exception as e:
+            logger.warning(f"RiskManager review failed, using original CIO draft: {e}")
+
+        report = DailyReport(**final_report_json)
         report.date = resolved_report_date.isoformat()
         report = self._apply_sparse_report_fallback(
             report=report,
@@ -604,8 +637,8 @@ class ReportOrchestrator:
                 "profile": profile,
                 "context_event_count": len(selected_events),
                 "context_theme_count": len(selected_themes),
-                "macro_chain_present": report.macroTransmissionChain is not None,
-                "asset_breakdown_count": len(report.assetTransmissionBreakdowns or []),
+                "macro_chain_present": False,
+                "asset_breakdown_count": 0,
                 "fallback_fields": list(self.last_sparse_fallback_fields),
             }
         )
@@ -715,9 +748,9 @@ class ReportOrchestrator:
                 "profile": profile,
                 "context_event_count": len(selected_events),
                 "context_theme_count": len(selected_themes),
-                "macro_chain_present": False,
-                "asset_breakdown_count": 0,
-                "fallback_fields": [],
+                "macro_chain_present": report.macroTransmissionChain is not None,
+                "asset_breakdown_count": len(report.assetTransmissionBreakdowns or []),
+                "fallback_fields": list(self.last_sparse_fallback_fields),
             }
         )
         return metrics

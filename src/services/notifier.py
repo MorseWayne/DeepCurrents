@@ -71,6 +71,35 @@ class Notifier:
 
     async def send_to_feishu(self, report: DailyReport, news_count: int, cluster_count: int):
         md = f"**🌊 核心主线 | Executive Summary**\n{report.executiveSummary}\n\n"
+        macro_chain = self._report_mapping(getattr(report, "macroTransmissionChain", None))
+        asset_breakdowns = self._report_mapping_list(
+            getattr(report, "assetTransmissionBreakdowns", None)
+        )
+
+        if macro_chain:
+            md += "**🔗 总主线传导链 | Macro Transmission**\n"
+            headline = self._text(macro_chain.get("headline"))
+            shock_source = self._text(macro_chain.get("shockSource"))
+            macro_variables = self._text_list(macro_chain.get("macroVariables"))
+            market_pricing = self._text(macro_chain.get("marketPricing"))
+            allocation = self._text(macro_chain.get("allocationImplication"))
+            steps = self._report_mapping_list(macro_chain.get("steps"))
+            if headline:
+                md += f"**主线**: {headline}\n"
+            if shock_source:
+                md += f"**冲击源**: {shock_source}\n"
+            if macro_variables:
+                md += f"**宏观变量**: {'、'.join(macro_variables[:4])}\n"
+            if market_pricing:
+                md += f"**市场定价**: {market_pricing}\n"
+            if allocation:
+                md += f"**配置含义**: {allocation}\n"
+            for idx, step in enumerate(steps[:4], start=1):
+                stage = self._text(step.get("stage")) or "链路节点"
+                driver = self._text(step.get("driver"))
+                if driver:
+                    md += f"{idx}. **{stage}**: {driver}\n"
+            md += "\n"
         
         if report.intelligenceDigest:
             md += "**📋 情报摘要 | Intelligence Digest**\n"
@@ -88,6 +117,32 @@ class Notifier:
             md += f"**{i+1}. {icon}{e.title}**\n{e.detail}\n\n"
 
         md += f"**📈 宏观趋势深度研判 | Deep Insights**\n{report.economicAnalysis}\n\n"
+
+        if asset_breakdowns:
+            md += "**🎯 关键资产拆解 | Asset Breakdown**\n"
+            for item in asset_breakdowns[:4]:
+                asset_class = self._text(item.get("assetClass")) or "Macro Basket"
+                trend = self._text(item.get("trend")) or "Neutral"
+                icon = '🟢 看涨' if trend == 'Bullish' else ('🔴 看跌' if trend == 'Bearish' else '⚪ 中性')
+                confidence = self._text(item.get("confidence"))
+                timeframe = self._text(item.get("timeframe"))
+                suffix = f" ({confidence}%)" if confidence else ""
+                if timeframe:
+                    suffix += f" [{timeframe}]"
+                md += f"- **{asset_class}** ({icon}{suffix})\n"
+                core_view = self._text(item.get("coreView"))
+                transmission_path = self._text(item.get("transmissionPath"))
+                key_drivers = self._text_list(item.get("keyDrivers"))
+                watch_signals = self._text_list(item.get("watchSignals"))
+                if core_view:
+                    md += f"  核心观点: {core_view}\n"
+                if transmission_path:
+                    md += f"  传导路径: {transmission_path}\n"
+                if key_drivers:
+                    md += f"  驱动: {'、'.join(key_drivers[:4])}\n"
+                if watch_signals:
+                    md += f"  观察点: {'、'.join(watch_signals[:3])}\n"
+            md += "\n"
 
         md += "**💼 资产配置与投资风向 | Investment Strategy**\n"
         for t in report.investmentTrends:
@@ -252,13 +307,50 @@ class Notifier:
             return []
         return [str(item).strip() for item in value if str(item).strip()]
 
+    @staticmethod
+    def _report_mapping(value: Any) -> dict[str, Any]:
+        if isinstance(value, Mapping):
+            return dict(value)
+        if hasattr(value, "model_dump"):
+            dumped = value.model_dump()
+            if isinstance(dumped, Mapping):
+                return dict(dumped)
+        return {}
+
+    @classmethod
+    def _report_mapping_list(cls, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return []
+        result: list[dict[str, Any]] = []
+        for item in value:
+            mapping = cls._report_mapping(item)
+            if mapping:
+                result.append(mapping)
+        return result
+
     async def send_to_telegram(self, report: DailyReport):
         text = f"🌊 <b>DeepCurrents Daily Intelligence</b>\n📅 {escape(report.date)}\n\n"
         text += f"<b>核心主线:</b> {escape(report.executiveSummary)}\n\n"
+        macro_chain = self._report_mapping(getattr(report, "macroTransmissionChain", None))
+        asset_breakdowns = self._report_mapping_list(
+            getattr(report, "assetTransmissionBreakdowns", None)
+        )
+        if macro_chain.get("headline"):
+            text += f"<b>总主线传导链:</b> {escape(self._text(macro_chain.get('headline')))}\n"
+            market_pricing = self._text(macro_chain.get("marketPricing"))
+            if market_pricing:
+                text += f"{escape(market_pricing)}\n\n"
         
         text += "<b>📊 重大事件:</b>\n"
         for i, e in enumerate(report.globalEvents[:5]):
             text += f"{i + 1}. <b>{escape(e.title)}</b>\n"
+
+        if asset_breakdowns:
+            text += "\n<b>🎯 关键资产拆解:</b>\n"
+            for item in asset_breakdowns[:2]:
+                asset_class = self._text(item.get("assetClass")) or "Macro Basket"
+                core_view = self._text(item.get("coreView"))
+                text += f"• <b>{escape(asset_class)}</b>: {escape(core_view)}\n"
 
         text += "\n<b>💼 资产研判:</b>\n"
         for t in report.investmentTrends:

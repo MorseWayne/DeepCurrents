@@ -77,8 +77,37 @@ class FakeAIService:
             "date": "2026-03-13",
             "intelligenceDigest": [],
             "executiveSummary": "主线是事件卡驱动的能源与风险情绪再定价。",
+            "macroTransmissionChain": {
+                "headline": "能源主线正在通过通胀预期重定价跨资产。",
+                "shockSource": "航运与能源冲击",
+                "macroVariables": ["能源供给预期", "通胀预期"],
+                "marketPricing": "原油偏强，风险资产承压。",
+                "allocationImplication": "优先关注能源链和防御性资产。",
+                "steps": [
+                    {"stage": "冲击源", "driver": "航运与能源冲击"},
+                    {"stage": "市场定价", "driver": "原油偏强，风险资产承压。"}
+                ]
+            },
             "globalEvents": [],
             "economicAnalysis": "航运与能源冲击抬升通胀尾部风险。",
+            "assetTransmissionBreakdowns": [
+                {
+                    "assetClass": "Brent",
+                    "trend": "Bullish",
+                    "coreView": "原油更直接表达供给收缩预期。",
+                    "transmissionPath": "航运扰动 -> 供给预期收紧 -> 原油风险溢价抬升 -> Brent 偏强",
+                    "keyDrivers": ["能源供给预期"],
+                    "watchSignals": ["运价"]
+                },
+                {
+                    "assetClass": "Gold",
+                    "trend": "Bullish",
+                    "coreView": "黄金承接部分防御需求。",
+                    "transmissionPath": "能源冲击 -> 风险溢价抬升 -> 黄金受益",
+                    "keyDrivers": ["风险溢价"],
+                    "watchSignals": ["美元", "实际利率"]
+                }
+            ],
             "investmentTrends": [
                 {"assetClass": "Brent", "trend": "Bullish", "rationale": "能源风险溢价抬升"}
             ]
@@ -182,8 +211,10 @@ class FakeReportContextBuilder:
                     "render_mode": "full",
                     "brief_json": {
                         "eventId": "evt_energy",
+                        "canonicalTitle": "航运扰动升级",
                         "stateChange": "escalated",
                         "whyItMatters": "Shipping disruption raises energy risk.",
+                        "marketChannels": ["energy", "shipping"],
                         "lastTransition": {"toState": "escalating", "reason": "risk spread"},
                         "evidenceRefs": ["art_1"],
                     },
@@ -194,7 +225,11 @@ class FakeReportContextBuilder:
                     "theme_key": "energy",
                     "theme_brief_id": "theme_brief_energy_2026-03-13_v1",
                     "brief_version": "v1",
-                    "brief_json": {"themeKey": "energy"},
+                    "brief_json": {
+                        "themeKey": "energy",
+                        "displayName": "能源",
+                        "summary": "能源供给与航运链条正在共同抬升风险溢价。",
+                    },
                 }
             ],
             "prompt_sections": {
@@ -304,6 +339,11 @@ async def test_report_orchestrator_generates_event_centric_report_from_services(
     assert orchestrator.last_context_package["coverage_summary"]["event_count"] == 1
     assert orchestrator.last_report_metrics["context_event_count"] == 1
     assert orchestrator.last_report_metrics["report_generated"] is True
+    assert report.macroTransmissionChain is not None
+    assert report.assetTransmissionBreakdowns is not None
+    assert len(report.assetTransmissionBreakdowns) == 2
+    assert orchestrator.last_report_metrics["macro_chain_present"] is True
+    assert orchestrator.last_report_metrics["asset_breakdown_count"] == 2
     assert len(ai_service.persisted_reports) == 1
     mock_log_metrics.assert_called_once()
     assert mock_log_metrics.call_args.args[1] == "report"
@@ -378,6 +418,12 @@ async def test_report_orchestrator_fills_sparse_strategist_output_from_context()
     assert report.executiveSummary != "暂无明确主线，建议关注后续数据更新。"
     assert report.economicAnalysis != "暂无明确主线，建议关注后续数据更新。"
     assert len(report.investmentTrends) >= 1
+    assert report.macroTransmissionChain is not None
+    assert len(report.macroTransmissionChain.steps) >= 3
+    assert report.assetTransmissionBreakdowns is not None
+    assert len(report.assetTransmissionBreakdowns) >= 2
+    assert "macroTransmissionChain" in orchestrator.last_sparse_fallback_fields
+    assert "assetTransmissionBreakdowns" in orchestrator.last_sparse_fallback_fields
 
 
 @pytest.mark.asyncio

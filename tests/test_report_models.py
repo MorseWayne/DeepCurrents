@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from src.services.report_models import (
     AgentInsights,
+    AssetTransmissionBreakdown,
     DailyReport,
     GlobalEvent,
     IntelligenceItem,
     IntelSource,
     InvestmentTrend,
     MacroAnalystOutput,
+    MacroTransmissionChain,
+    MacroTransmissionStep,
     SentimentAnalystOutput,
 )
 
@@ -26,6 +29,19 @@ def test_daily_report_models_instantiate_cleanly():
             )
         ],
         executiveSummary="主线是能源与运价冲击。",
+        macroTransmissionChain=MacroTransmissionChain(
+            headline="能源与航运扰动正在通过通胀预期重定价跨资产。",
+            shockSource="航运扰动升级",
+            macroVariables=["能源供给预期", "通胀预期"],
+            marketPricing="原油与黄金偏强，风险资产承压。",
+            allocationImplication="优先配置能源链与防御性资产。",
+            steps=[
+                MacroTransmissionStep(stage="冲击源", driver="航运扰动升级"),
+                MacroTransmissionStep(stage="宏观变量", driver="能源供给预期与通胀预期上修"),
+            ],
+            timeframe="short-term",
+            confidence=81,
+        ),
         globalEvents=[
             GlobalEvent(
                 title="红海航运扰动",
@@ -35,6 +51,18 @@ def test_daily_report_models_instantiate_cleanly():
             )
         ],
         economicAnalysis="能源价格上行增加通胀粘性。",
+        assetTransmissionBreakdowns=[
+            AssetTransmissionBreakdown(
+                assetClass="Brent",
+                trend="Bullish",
+                coreView="原油更直接表达供给收缩预期。",
+                transmissionPath="航运扰动 -> 供给预期收紧 -> 原油风险溢价抬升 -> Brent 偏强",
+                keyDrivers=["能源供给预期", "航运风险"],
+                watchSignals=["运价", "库存"],
+                timeframe="short-term",
+                confidence=82,
+            )
+        ],
         investmentTrends=[
             InvestmentTrend(
                 assetClass="Brent",
@@ -52,6 +80,8 @@ def test_daily_report_models_instantiate_cleanly():
 
     assert report.globalEvents[0].title == "红海航运扰动"
     assert report.investmentTrends[0].trend == "Bullish"
+    assert report.macroTransmissionChain is not None
+    assert report.assetTransmissionBreakdowns is not None
     assert report.agentInsights is not None
 
 
