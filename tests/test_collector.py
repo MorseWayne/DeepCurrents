@@ -337,9 +337,11 @@ async def test_fetch_source_refreshes_features_for_existing_event_intelligence_a
         semantic_deduper=deduper,
     )
 
-    with patch("aiohttp.ClientSession.get") as mock_get:
-        mock_rss_response(mock_get)
-        result = await collector.fetch_source(source)
+    with patch("src.services.collector.logger.info") as mock_info:
+        with patch("src.services.collector.logger.warning") as mock_warning:
+            with patch("aiohttp.ClientSession.get") as mock_get:
+                mock_rss_response(mock_get)
+                result = await collector.fetch_source(source)
 
     assert result["new_count"] == 1
     repository.get_article.assert_awaited_once_with(normalizer.article.article_id)
@@ -348,6 +350,15 @@ async def test_fetch_source_refreshes_features_for_existing_event_intelligence_a
     deduper.link_semantic_duplicates.assert_awaited_once_with(
         normalizer.article,
         embedding=[0.1, 0.2, 0.3],
+    )
+    assert not any(
+        "Article already exists" in call.args[0] for call in mock_info.call_args_list
+    )
+    assert any(
+        "duplicate refreshes: 1" in call.args[0] for call in mock_info.call_args_list
+    )
+    assert not any(
+        "Article already exists" in call.args[0] for call in mock_warning.call_args_list
     )
 
 
@@ -401,12 +412,13 @@ async def test_collect_all_aggregates_extended_ingestion_metrics(source):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-    with patch("src.services.collector.SOURCES", [source, other_source]):
-        with patch(
-            "src.services.collector.aiohttp.ClientSession",
-            return_value=StubClientSession(),
-        ):
-            stats = await collector.collect_all()
+    with patch("src.services.collector.logger.info") as mock_info:
+        with patch("src.services.collector.SOURCES", [source, other_source]):
+            with patch(
+                "src.services.collector.aiohttp.ClientSession",
+                return_value=StubClientSession(),
+            ):
+                stats = await collector.collect_all()
 
     assert stats["sources_total"] == 2
     assert stats["sources_failed"] == 1
@@ -417,3 +429,7 @@ async def test_collect_all_aggregates_extended_ingestion_metrics(source):
     assert stats["new_items"] == 2
     assert stats["errors"] == 1
     assert stats["article_to_event_compression_ratio"] == pytest.approx(1.0)
+    assert any(
+        "duplicate refresh summary: 1 across 1 sources" in call.args[0]
+        for call in mock_info.call_args_list
+    )

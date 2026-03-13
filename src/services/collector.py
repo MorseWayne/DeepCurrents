@@ -142,6 +142,7 @@ class RSSCollector:
             self._safe_int(metrics.get("events_touched")),
             self._safe_int(metrics.get("articles_inserted")),
         )
+        self._log_duplicate_refresh_total_summary(results, metrics)
 
         logger.info(
             f"[采集完成] 新增 {total_new} | 跳过 {total_skipped} | 错误 {total_errors}"
@@ -276,12 +277,14 @@ class RSSCollector:
                 self.breaker.record_success(source.name)
                 if new_count > 0:
                     logger.info(f"[+{new_count}] T{source.tier} {source.name}")
+                self._log_duplicate_refresh_source_summary(source, source_metrics)
 
                 return {"new_count": new_count, **source_metrics}
 
             except Exception as e:
                 self.breaker.record_failure(source.name)
                 err = str(e).strip() or e.__class__.__name__
+                self._log_duplicate_refresh_source_summary(source, source_metrics)
                 logger.error(f"[ERR] T{source.tier} {source.name}: {err}")
                 return {"error": err, **source_metrics}
             finally:
@@ -346,9 +349,6 @@ class RSSCollector:
             if existing is None:
                 logger.error(f"[EIL] Failed to persist article {link}: {exc}")
                 return {"inserted": False, **metrics}
-            logger.warning(
-                f"[EIL] Article already exists for {link}; refreshing features: {exc}"
-            )
             duplicate_refresh = True
             metrics["duplicate_refreshes"] += 1
 
@@ -451,6 +451,34 @@ class RSSCollector:
             target[key] = self._safe_int(target.get(key)) + self._safe_int(
                 payload.get(key)
             )
+
+    def _log_duplicate_refresh_source_summary(
+        self,
+        source: Source,
+        payload: Mapping[str, Any],
+    ) -> None:
+        duplicate_refreshes = self._safe_int(payload.get("duplicate_refreshes"))
+        if duplicate_refreshes <= 0:
+            return
+        logger.info(
+            f"[EIL] T{source.tier} {source.name} duplicate refreshes: {duplicate_refreshes}"
+        )
+
+    def _log_duplicate_refresh_total_summary(
+        self,
+        results: Sequence[Mapping[str, Any]],
+        metrics: Mapping[str, Any],
+    ) -> None:
+        total_duplicate_refreshes = self._safe_int(metrics.get("duplicate_refreshes"))
+        if total_duplicate_refreshes <= 0:
+            return
+        duplicate_sources = sum(
+            1 for result in results if self._safe_int(result.get("duplicate_refreshes")) > 0
+        )
+        logger.info(
+            "[EIL] duplicate refresh summary: "
+            f"{total_duplicate_refreshes} across {duplicate_sources} sources"
+        )
 
     @staticmethod
     def _safe_int(value: Any) -> int:

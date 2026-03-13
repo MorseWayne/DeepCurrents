@@ -8,6 +8,8 @@ from .repository_support import (
     ensure_pool,
     normalize_row,
     normalize_rows,
+    serialize_jsonb,
+    serialize_jsonb_fields,
 )
 
 
@@ -48,6 +50,7 @@ class EventRepository:
                 metadata
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ON CONFLICT (event_id) DO NOTHING
             RETURNING *
             """,
             event["event_id"],
@@ -61,8 +64,10 @@ class EventRepository:
             event.get("latest_article_at"),
             event.get("article_count", 0),
             event.get("source_count", 0),
-            event.get("metadata", {}),
+            serialize_jsonb(event.get("metadata", {})),
         )
+        if row is None:
+            return await self.get_event(event["event_id"]) or {}
         return normalize_row(row) or {}
 
     async def get_event(self, event_id: str) -> dict[str, Any] | None:
@@ -74,8 +79,9 @@ class EventRepository:
         self, event_id: str, fields: Mapping[str, Any]
     ) -> dict[str, Any]:
         pool = ensure_pool(self._pool)
+        serialized_fields = serialize_jsonb_fields(fields, ("metadata",))
         assignments, values = build_update_fields(
-            fields,
+            serialized_fields,
             self._EVENT_UPDATE_FIELDS,
             start_index=2,
         )
@@ -200,7 +206,7 @@ class EventRepository:
             score.get("velocity_score", 0),
             score.get("uncertainty_score", 0),
             score.get("total_score", 0),
-            score.get("payload", {}),
+            serialize_jsonb(score.get("payload", {})),
             score.get("scored_at"),
         )
         return normalize_row(row) or {}
@@ -245,6 +251,7 @@ class EventRepository:
                 metadata
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (transition_id) DO NOTHING
             RETURNING *
             """,
             transition["transition_id"],
@@ -253,8 +260,14 @@ class EventRepository:
             transition["to_state"],
             transition.get("trigger_article_id"),
             transition.get("reason", ""),
-            transition.get("metadata", {}),
+            serialize_jsonb(transition.get("metadata", {})),
         )
+        if row is None:
+            row = await pool.fetchrow(
+                "SELECT * FROM event_state_transitions WHERE transition_id = $1",
+                transition["transition_id"],
+            )
+            return normalize_row(row) or {}
         return normalize_row(row) or {}
 
     async def list_event_state_transitions(self, event_id: str) -> list[dict[str, Any]]:

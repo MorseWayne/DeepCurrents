@@ -73,7 +73,7 @@ def require_stub_store(store: object) -> StubStore:
 
 @pytest.mark.asyncio
 async def test_event_intelligence_bootstrap_disabled_by_default():
-    settings = Settings()
+    settings = Settings(event_intelligence_enabled=False)
     bootstrap = EventIntelligenceBootstrap(settings)
 
     state = await bootstrap.start()
@@ -84,7 +84,12 @@ async def test_event_intelligence_bootstrap_disabled_by_default():
 
 @pytest.mark.asyncio
 async def test_event_intelligence_bootstrap_validates_required_settings():
-    settings = Settings(event_intelligence_enabled=True)
+    settings = Settings(
+        event_intelligence_enabled=True,
+        event_intelligence_postgres_dsn="",
+        event_intelligence_qdrant_url="",
+        event_intelligence_redis_url="",
+    )
     bootstrap = EventIntelligenceBootstrap(settings)
 
     with pytest.raises(ValueError):

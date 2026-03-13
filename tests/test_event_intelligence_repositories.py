@@ -212,6 +212,7 @@ async def test_event_repository_crud_queries_and_updates():
     assert events == [{"event_id": "evt_1", "status": "active"}]
     assert loaded == {"event_id": "evt_1", "status": "active"}
     assert "INSERT INTO events" in pool.connection.calls[0][1]
+    assert "ON CONFLICT (event_id) DO NOTHING" in pool.connection.calls[0][1]
     assert "UPDATE events" in pool.connection.calls[1][1]
     assert "status = ANY($1::text[])" in pool.connection.calls[2][1]
     assert pool.connection.calls[3][1] == "SELECT * FROM events WHERE event_id = $1"
@@ -261,11 +262,61 @@ async def test_event_repository_manages_members_scores_and_transitions():
     assert transitions == [{"transition_id": "tr_1", "event_id": "evt_1"}]
     assert "ON CONFLICT (event_id, article_id)" in pool.connection.calls[0][1]
     assert "ON CONFLICT (event_id, profile)" in pool.connection.calls[1][1]
+    assert "ON CONFLICT (transition_id) DO NOTHING" in pool.connection.calls[4][1]
     assert (
         pool.connection.calls[2][1]
         == "SELECT * FROM event_scores WHERE event_id = $1 AND profile = $2"
     )
     assert "FROM event_scores" in pool.connection.calls[3][1]
+
+
+@pytest.mark.asyncio
+async def test_event_repository_returns_existing_event_on_duplicate_create():
+    pool = FakePool()
+    repo = EventRepository(pool)
+    pool.connection.fetchrow_results = [
+        None,
+        {"event_id": "evt_1", "status": "active", "canonical_title": "Existing"},
+    ]
+
+    created = await repo.create_event(
+        {"event_id": "evt_1", "status": "new", "canonical_title": "Incoming"}
+    )
+
+    assert created == {
+        "event_id": "evt_1",
+        "status": "active",
+        "canonical_title": "Existing",
+    }
+    assert "ON CONFLICT (event_id) DO NOTHING" in pool.connection.calls[0][1]
+    assert pool.connection.calls[1][1] == "SELECT * FROM events WHERE event_id = $1"
+    assert pool.connection.calls[1][2] == ("evt_1",)
+
+
+@pytest.mark.asyncio
+async def test_event_repository_returns_existing_transition_on_duplicate_record():
+    pool = FakePool()
+    repo = EventRepository(pool)
+    pool.connection.fetchrow_results = [
+        None,
+        {"transition_id": "tr_1", "event_id": "evt_1", "to_state": "updated"},
+    ]
+
+    transition = await repo.record_state_transition(
+        {"transition_id": "tr_1", "event_id": "evt_1", "to_state": "updated"}
+    )
+
+    assert transition == {
+        "transition_id": "tr_1",
+        "event_id": "evt_1",
+        "to_state": "updated",
+    }
+    assert "ON CONFLICT (transition_id) DO NOTHING" in pool.connection.calls[0][1]
+    assert (
+        pool.connection.calls[1][1]
+        == "SELECT * FROM event_state_transitions WHERE transition_id = $1"
+    )
+    assert pool.connection.calls[1][2] == ("tr_1",)
 
 
 @pytest.mark.asyncio
