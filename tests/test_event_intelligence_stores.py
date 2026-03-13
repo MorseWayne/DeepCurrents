@@ -1,7 +1,11 @@
 import pytest
 
 from src.services.cache_service import CacheService
-from src.services.postgres_store import PostgresStore
+from src.services.postgres_store import (
+    PostgresStore,
+    _decode_json_codec_value,
+    _encode_json_codec_value,
+)
 from src.services.vector_store import VectorStore
 
 
@@ -212,6 +216,21 @@ async def test_postgres_store_registers_json_codecs_on_created_pool(monkeypatch)
             "format": "text",
         },
     ]
+
+
+def test_postgres_json_codec_encoder_does_not_double_serialize_json_text():
+    encoded = _encode_json_codec_value('{"eventId":"evt_1"}')
+    assert encoded == '{"eventId":"evt_1"}'
+
+
+def test_postgres_json_codec_encoder_serializes_plain_text_to_json_string():
+    encoded = _encode_json_codec_value("plain-text")
+    assert encoded == '"plain-text"'
+
+
+def test_postgres_json_codec_decoder_parses_json_document():
+    decoded = _decode_json_codec_value('{"eventId":"evt_1"}')
+    assert decoded == {"eventId": "evt_1"}
 
 
 @pytest.mark.asyncio

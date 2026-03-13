@@ -68,6 +68,31 @@ class PostgresStore:
             await connection.set_type_codec(
                 typename,
                 schema="pg_catalog",
-                encoder=json.dumps,
-                decoder=json.loads,
+                encoder=_encode_json_codec_value,
+                decoder=_decode_json_codec_value,
             )
+
+
+def _encode_json_codec_value(value: Any) -> str:
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="ignore").strip()
+    elif isinstance(value, str):
+        text = value.strip()
+    else:
+        return json.dumps(value, ensure_ascii=False, default=str)
+
+    if not text:
+        return json.dumps(value, ensure_ascii=False, default=str)
+
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    return text
+
+
+def _decode_json_codec_value(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value

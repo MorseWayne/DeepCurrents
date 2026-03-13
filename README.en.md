@@ -111,9 +111,11 @@ Manual report generation:
 uv run -m src.run_report
 uv run -m src.run_report --no-push
 uv run -m src.run_report --report-only
+uv run -m src.run_report --report-only --force
 ```
 
 `uv run -m src.run_report --report-only` only works if event-intelligence data already exists in PostgreSQL.
+Use `--force` to bypass the last-report time window and regenerate from existing data.
 
 ### 6. Test
 

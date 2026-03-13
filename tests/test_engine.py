@@ -118,6 +118,49 @@ async def test_engine_generate_report_flow_uses_event_orchestrator(engine):
 
 
 @pytest.mark.asyncio
+async def test_engine_generate_report_flow_force_ignores_last_report_since(engine):
+    report = MagicMock(date="2026-03-13", investmentTrends=[])
+    engine._report_profile = "risk_daily"
+    engine._report_repository = MagicMock()
+    engine._report_repository.get_latest_report_run = AsyncMock(
+        return_value={"updated_at": datetime(2026, 3, 13, 6, 0, tzinfo=UTC)}
+    )
+    engine._report_orchestrator = MagicMock()
+    engine._report_orchestrator.generate_event_centric_report = AsyncMock(
+        return_value=report
+    )
+    engine._report_orchestrator.last_report_metrics = {
+        "profile": "risk_daily",
+        "context_event_count": 2,
+        "context_theme_count": 1,
+        "cluster_count": 1,
+        "report_generated": True,
+        "investment_trend_count": 0,
+        "guard_pre_tokens": 100,
+        "guard_post_tokens": 80,
+        "trimmed_sections": [],
+        "budget_truncation_rate": 0.0,
+        "final_hard_cap_hit": False,
+    }
+    engine._report_orchestrator.last_report_guard_stats = {
+        "pre_guard_tokens": 100,
+        "post_guard_tokens": 80,
+        "trimmed_sections": [],
+    }
+    engine.notifier.deliver_all = AsyncMock()
+
+    with patch("src.engine.log_stage_metrics"):
+        result = await engine.generate_and_send_report(force=True)
+
+    assert result is report
+    engine._report_repository.get_latest_report_run.assert_not_called()
+    report_call = engine._report_orchestrator.generate_event_centric_report.call_args
+    assert report_call.kwargs["since"] is None
+    assert report_call.kwargs["profile"] == "risk_daily"
+    assert isinstance(report_call.kwargs["report_date"], date)
+
+
+@pytest.mark.asyncio
 async def test_engine_generate_report_flow_skips_when_no_event_changes(engine):
     engine._report_profile = "macro_daily"
     engine._report_repository = MagicMock()

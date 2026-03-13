@@ -318,6 +318,22 @@ async def test_report_orchestrator_builds_market_context_when_missing():
 
 
 @pytest.mark.asyncio
+async def test_report_orchestrator_overrides_report_date_with_requested_date():
+    ai_service = FakeAIService()
+    builder = FakeReportContextBuilder()
+    orchestrator = ReportOrchestrator(ai_service, builder)
+
+    report = await orchestrator.generate_event_centric_report(
+        statuses=["new", "updated"],
+        profile="macro_daily",
+        report_date=date(2026, 3, 14),
+    )
+
+    assert isinstance(report, DailyReport)
+    assert report.date == "2026-03-14"
+
+
+@pytest.mark.asyncio
 async def test_report_orchestrator_records_report_trace_when_tracker_is_injected():
     ai_service = FakeAIService()
     builder = FakeReportContextBuilder()

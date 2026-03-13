@@ -212,7 +212,7 @@ class EventRepository:
             serialize_jsonb(score.get("payload", {})),
             score.get("scored_at"),
         )
-        return normalize_row(row) or {}
+        return normalize_row(row, json_field_names=self._EVENT_SCORE_JSON_FIELDS) or {}
 
     async def get_event_score(
         self, event_id: str, profile: str
@@ -270,9 +270,9 @@ class EventRepository:
                 "SELECT * FROM event_state_transitions WHERE transition_id = $1",
                 transition["transition_id"],
             )
-                return (
-                    normalize_row(row, json_field_names=self._TRANSITION_JSON_FIELDS) or {}
-                )
+            return (
+                normalize_row(row, json_field_names=self._TRANSITION_JSON_FIELDS) or {}
+            )
         return normalize_row(row, json_field_names=self._TRANSITION_JSON_FIELDS) or {}
 
     async def list_event_state_transitions(self, event_id: str) -> list[dict[str, Any]]:

@@ -134,11 +134,13 @@ uv run -m src.main
 uv run -m src.run_report                                    # 完整流程 (采集 + 生成 + 推送)
 uv run -m src.run_report --no-push                          # 预览模式：不推送、不标记已报告
 uv run -m src.run_report --report-only                      # 仅用已有数据生成（跳过采集）
+uv run -m src.run_report --report-only --force              # 强制生成：忽略最近一次报告时间窗口
 uv run -m src.run_report --json                             # 以 JSON 格式输出到终端
 uv run -m src.run_report --output data/reports/today.md     # 写入文件
 ```
 
 `uv run -m src.run_report --report-only` 只适用于数据库中已经存在 event-intelligence 数据的场景，不再依赖旧 SQLite 新闻缓存。
+如需忽略最近一次报告时间窗口并基于现有数据强制重生成，可使用 `--force`。
 
 ---
 
@@ -173,6 +175,7 @@ uv run -m src.main
 uv run -m src.run_report
 uv run -m src.run_report --no-push
 uv run -m src.run_report --report-only
+uv run -m src.run_report --report-only --force
 ```
 
 宿主机模式下，`.env` 中应保持以下地址：

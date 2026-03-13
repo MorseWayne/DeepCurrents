@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timezone
 
 from src.services.ai_service import AIService, DailyReport, DEFAULT_CONTEXT_WINDOW
 
@@ -41,6 +42,40 @@ async def test_parse_daily_report_json_normalizes_legacy_schema(
     assert report.investmentTrends[0].assetClass == "原油与航运"
     assert report.investmentTrends[0].trend == "Bullish"
     assert report.investmentTrends[0].timeframe == "中短期"
+
+
+def test_normalize_daily_report_payload_replaces_placeholder_date(
+    mock_prediction_repository,
+):
+    ai_service = AIService(mock_prediction_repository)
+    normalized = ai_service.normalize_daily_report_payload(
+        {
+            "date": "YYYY-MM-DD",
+            "executiveSummary": "摘要",
+            "economicAnalysis": "分析",
+            "globalEvents": [],
+            "investmentTrends": [],
+            "intelligenceDigest": [],
+        }
+    )
+    assert normalized["date"] == datetime.now(timezone.utc).date().isoformat()
+
+
+def test_normalize_daily_report_payload_parses_datetime_text_date(
+    mock_prediction_repository,
+):
+    ai_service = AIService(mock_prediction_repository)
+    normalized = ai_service.normalize_daily_report_payload(
+        {
+            "date": "2026-03-14T12:30:45Z",
+            "executiveSummary": "摘要",
+            "economicAnalysis": "分析",
+            "globalEvents": [],
+            "investmentTrends": [],
+            "intelligenceDigest": [],
+        }
+    )
+    assert normalized["date"] == "2026-03-14"
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,7 @@ async def run_report(args):
         report = await engine.generate_and_send_report(
             skip_push=args.no_push,
             skip_mark=args.no_push,  # 预览模式通常不标记已读
+            force=args.force,
         )
 
         if not report:
@@ -73,6 +74,11 @@ def main():
     )
     parser.add_argument(
         "--no-push", action="store_true", help="预览模式：不推送通知，不标记已报告"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="强制生成：忽略最近一次报告时间窗口（仍仅使用现有数据）",
     )
     parser.add_argument("--json", action="store_true", help="以 JSON 格式输出")
     parser.add_argument("--output", "-o", type=str, help="将研报保存到指定文件")

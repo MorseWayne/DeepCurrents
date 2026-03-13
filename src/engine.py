@@ -243,7 +243,11 @@ class DeepCurrentsEngine:
             logger.error(f"采集任务失败: {e}")
 
     async def generate_and_send_report(
-        self, skip_push: bool = False, skip_mark: bool = False
+        self,
+        skip_push: bool = False,
+        skip_mark: bool = False,
+        *,
+        force: bool = False,
     ):
         """生成并发送研报"""
         cluster_count = 0
@@ -268,7 +272,7 @@ class DeepCurrentsEngine:
                 logger.warning("Event-centric report stack 未就绪，跳过研报生成。")
                 return None
 
-            since = await self._resolve_last_report_since(profile)
+            since = None if force else await self._resolve_last_report_since(profile)
             report = await self._report_orchestrator.generate_event_centric_report(
                 statuses=REPORT_EVENT_STATUSES,
                 since=since,
@@ -306,6 +310,7 @@ class DeepCurrentsEngine:
                     since=since.isoformat() if since else "",
                     skip_push=skip_push,
                     skip_mark=skip_mark,
+                    force=force,
                 )
                 logger.info("没有新的事件变化需要报告。")
                 return None
@@ -325,6 +330,7 @@ class DeepCurrentsEngine:
                 since=since.isoformat() if since else "",
                 skip_push=skip_push,
                 skip_mark=skip_mark,
+                force=force,
             )
 
             if not skip_push:

@@ -121,6 +121,7 @@ class ReportOrchestrator:
         self.last_report_metrics = {}
         self.last_agent_outputs = {}
         self.last_report_trace = {}
+        resolved_report_date = report_date or date.today()
 
         shared_window, provider_windows = await self.ai_service._resolve_shared_context_window()
         budget = self.ai_service._compute_input_budget(shared_window)
@@ -145,7 +146,7 @@ class ReportOrchestrator:
                 event_limit=event_limit,
                 theme_limit=theme_limit,
                 evidence_limit=evidence_limit,
-                report_date=report_date,
+                report_date=resolved_report_date,
                 version=version,
             )
 
@@ -201,6 +202,7 @@ class ReportOrchestrator:
         )
         parsed_json = await self.ai_service.parse_daily_report_json(final_raw)
         report = DailyReport(**parsed_json)
+        report.date = resolved_report_date.isoformat()
 
         self.last_context_package = dict(context_package)
         self.last_report_guard_stats = dict(guard_stats)
@@ -230,7 +232,7 @@ class ReportOrchestrator:
                 report=report,
                 context_package=context_package,
                 profile=profile,
-                report_date=report_date,
+                report_date=resolved_report_date,
                 version=version,
                 report_metrics=self.last_report_metrics,
                 guard_stats=guard_stats,

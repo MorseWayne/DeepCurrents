@@ -44,6 +44,12 @@ def test_deserialize_jsonb_round_trips_mapping_text():
     assert deserialized == {"region": "middle east", "channels": ["energy"]}
 
 
+def test_deserialize_jsonb_unwraps_double_serialized_mapping_text():
+    deserialized = deserialize_jsonb('"{\\"region\\": \\"middle east\\", \\"channels\\": [\\"energy\\"]}"')
+
+    assert deserialized == {"region": "middle east", "channels": ["energy"]}
+
+
 def test_deserialize_jsonb_fields_only_deserializes_selected_keys():
     fields = deserialize_jsonb_fields(
         {
@@ -64,6 +70,21 @@ def test_normalize_row_deserializes_selected_json_fields():
         {
             "event_id": "evt_1",
             "brief_json": '{"eventId": "evt_1", "totalScore": 0.91}',
+        },
+        json_field_names=("brief_json",),
+    )
+
+    assert row == {
+        "event_id": "evt_1",
+        "brief_json": {"eventId": "evt_1", "totalScore": 0.91},
+    }
+
+
+def test_normalize_row_deserializes_double_serialized_json_fields():
+    row = normalize_row(
+        {
+            "event_id": "evt_1",
+            "brief_json": '"{\\"eventId\\": \\"evt_1\\", \\"totalScore\\": 0.91}"',
         },
         json_field_names=("brief_json",),
     )

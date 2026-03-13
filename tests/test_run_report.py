@@ -14,7 +14,13 @@ async def test_run_report_bootstraps_runtime_before_report_only_flow():
     mock_engine.generate_and_send_report = AsyncMock(return_value=None)
     mock_engine.stop = AsyncMock()
 
-    args = SimpleNamespace(report_only=True, no_push=True, json=False, output=None)
+    args = SimpleNamespace(
+        report_only=True,
+        no_push=True,
+        force=False,
+        json=False,
+        output=None,
+    )
 
     with patch("src.run_report.DeepCurrentsEngine", return_value=mock_engine):
         await run_report(args)
@@ -23,3 +29,29 @@ async def test_run_report_bootstraps_runtime_before_report_only_flow():
     mock_engine.collect_data.assert_not_called()
     mock_engine.generate_and_send_report.assert_called_once()
     mock_engine.stop.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_report_passes_force_flag_to_engine_report_generation():
+    mock_engine = MagicMock()
+    mock_engine.bootstrap_runtime = AsyncMock()
+    mock_engine.collect_data = AsyncMock()
+    mock_engine.generate_and_send_report = AsyncMock(return_value=None)
+    mock_engine.stop = AsyncMock()
+
+    args = SimpleNamespace(
+        report_only=True,
+        no_push=True,
+        force=True,
+        json=False,
+        output=None,
+    )
+
+    with patch("src.run_report.DeepCurrentsEngine", return_value=mock_engine):
+        await run_report(args)
+
+    mock_engine.generate_and_send_report.assert_called_once_with(
+        skip_push=True,
+        skip_mark=True,
+        force=True,
+    )

@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, Any, Optional, Literal, Tuple, List
 from openai import AsyncOpenAI
 from ..config.settings import CONFIG
@@ -51,6 +51,13 @@ VALID_TRENDS = {"Bullish", "Bearish", "Neutral"}
 VALID_CREDIBILITY = {"high", "medium", "low"}
 VALID_IMPORTANCE = {"critical", "high", "medium", "low"}
 VALID_THREAT_LEVELS = {"critical", "high", "medium", "low", "info"}
+DATE_PLACEHOLDER_TOKENS = {
+    "yyyy-mm-dd",
+    "yyyy/mm/dd",
+    "{{date}}",
+    "<date>",
+    "date",
+}
 
 def estimate_tokens(text: str) -> int:
     return int(len(text) / 3.5)
@@ -371,9 +378,29 @@ class AIService:
 
         return normalized
 
+    def _normalize_report_date(self, value: Any) -> str:
+        fallback = datetime.now(timezone.utc).date().isoformat()
+        text = self._to_text(value)
+        if not text:
+            return fallback
+
+        lowered = text.casefold()
+        if lowered in DATE_PLACEHOLDER_TOKENS:
+            return fallback
+
+        match = re.search(r"(\d{4})[-/](\d{2})[-/](\d{2})", text)
+        if not match:
+            return fallback
+
+        candidate = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+        try:
+            return date.fromisoformat(candidate).isoformat()
+        except ValueError:
+            return fallback
+
     def normalize_daily_report_payload(self, payload: Any) -> Dict[str, Any]:
         data = payload if isinstance(payload, dict) else {}
-        date_text = self._to_text(data.get("date")) or datetime.now().strftime("%Y-%m-%d")
+        date_text = self._normalize_report_date(data.get("date"))
 
         executive_summary = (
             self._to_text(data.get("executiveSummary"))

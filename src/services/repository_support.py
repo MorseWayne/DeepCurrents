@@ -34,18 +34,26 @@ def serialize_jsonb(value: Any) -> str:
 
 
 def deserialize_jsonb(value: Any) -> Any:
-    if isinstance(value, bytes):
-        text = value.decode("utf-8", errors="ignore").strip()
-    elif isinstance(value, str):
-        text = value.strip()
-    else:
-        return value
-    if not text:
-        return value
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return value
+    current = value
+    # Some historical rows were double-serialized into jsonb string payloads.
+    # Iterate a few times so "\"{...}\"" eventually normalizes to mapping/list.
+    for _ in range(3):
+        if isinstance(current, bytes):
+            text = current.decode("utf-8", errors="ignore").strip()
+        elif isinstance(current, str):
+            text = current.strip()
+        else:
+            return current
+
+        if not text:
+            return current
+
+        try:
+            current = json.loads(text)
+        except json.JSONDecodeError:
+            return current
+
+    return current
 
 
 def deserialize_jsonb_fields(
