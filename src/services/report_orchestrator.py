@@ -70,18 +70,35 @@ class ReportContextBuilderLike(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class ReportRunTrackerLike(Protocol):
+    async def record_completed_run(
+        self,
+        *,
+        report: DailyReport,
+        context_package: Mapping[str, Any],
+        profile: str,
+        report_date: date | None = None,
+        version: str | None = None,
+        report_metrics: Mapping[str, Any] | None = None,
+        guard_stats: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
 class ReportOrchestrator:
     def __init__(
         self,
         ai_service: AIServiceLike,
         report_context_builder: ReportContextBuilderLike,
+        report_run_tracker: ReportRunTrackerLike | None = None,
     ):
         self.ai_service = ai_service
         self.report_context_builder = report_context_builder
+        self.report_run_tracker = report_run_tracker
         self.last_context_package: dict[str, Any] = {}
         self.last_report_guard_stats: dict[str, Any] = {}
         self.last_report_metrics: dict[str, Any] = {}
         self.last_agent_outputs: dict[str, str] = {}
+        self.last_report_trace: dict[str, Any] = {}
 
     async def generate_event_centric_report(
         self,
@@ -103,6 +120,7 @@ class ReportOrchestrator:
         self.last_report_guard_stats = {}
         self.last_report_metrics = {}
         self.last_agent_outputs = {}
+        self.last_report_trace = {}
 
         shared_window, provider_windows = await self.ai_service._resolve_shared_context_window()
         budget = self.ai_service._compute_input_budget(shared_window)
@@ -191,6 +209,16 @@ class ReportOrchestrator:
         )
 
         await self.ai_service._persist_predictions(report)
+        if self.report_run_tracker is not None:
+            self.last_report_trace = await self.report_run_tracker.record_completed_run(
+                report=report,
+                context_package=context_package,
+                profile=profile,
+                report_date=report_date,
+                version=version,
+                report_metrics=self.last_report_metrics,
+                guard_stats=guard_stats,
+            )
         return report
 
     async def _resolve_market_context(self, market_context: Any) -> Any:

@@ -345,12 +345,19 @@ async def test_report_repository_crud_queries_and_updates():
         {"report_run_id": "run_1", "status": "completed"},
         {"report_run_id": "run_1", "status": "completed"},
     ]
+    pool.connection.fetch_results = [
+        [
+            {"report_run_id": "run_1", "status": "completed"},
+            {"report_run_id": "run_0", "status": "completed"},
+        ]
+    ]
 
     created = await repo.create_report_run(
         {"report_run_id": "run_1", "profile": "macro_daily", "report_date": report_date}
     )
     loaded = await repo.get_report_run_by_date("macro_daily", report_date)
     latest = await repo.get_latest_report_run("macro_daily")
+    listed = await repo.list_report_runs(profile="macro_daily", status="completed", limit=2)
     updated = await repo.update_report_run(
         "run_1", {"status": "completed", "selected_event_count": 5}
     )
@@ -358,11 +365,14 @@ async def test_report_repository_crud_queries_and_updates():
     assert created["status"] == "pending"
     assert loaded == {"report_run_id": "run_1", "status": "pending"}
     assert latest == {"report_run_id": "run_1", "status": "completed"}
+    assert [item["report_run_id"] for item in listed] == ["run_1", "run_0"]
     assert updated["status"] == "completed"
     assert "INSERT INTO report_runs" in pool.connection.calls[0][1]
     assert "report_date IS NOT DISTINCT FROM $2" in pool.connection.calls[1][1]
     assert "ORDER BY report_date DESC NULLS LAST" in pool.connection.calls[2][1]
-    assert "UPDATE report_runs" in pool.connection.calls[3][1]
+    assert "FROM report_runs" in pool.connection.calls[3][1]
+    assert "profile = $1 AND status = $2" in pool.connection.calls[3][1]
+    assert "UPDATE report_runs" in pool.connection.calls[4][1]
 
 
 @pytest.mark.asyncio

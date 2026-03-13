@@ -37,10 +37,11 @@
   22. `EIL-404`：已新增 `src/services/context_quota_policy.py`，将 `macro_daily / risk_daily / strategy_am` 三套上下文预算与多样性上限从 `report_context_builder` 中抽离；同时扩展 `src/utils/market_data.py`，新增结构化 `market_context` snapshot 与渲染 helper，并让 `report_context_builder` 支持 policy 驱动的预算分配、region theme 上限和结构化市场上下文渲染。
   23. `EIL-501`：已新增 `src/services/report_models.py`，将 `DailyReport` 及其相关输出模型从 `ai_service.py` 中抽离，并补充 `MacroAnalystOutput`、`SentimentAnalystOutput` 两个 v2 agent 输出 schema；同时重写 `src/services/prompts.py`，新增 event-centric Prompt v2 和 3 个输入拼装 helper，并保持旧 prompt 常量与 `ai_service` 顶层导出兼容。
   24. `EIL-502`：已新增 `src/services/report_orchestrator.py`，把 event-centric report flow 从 `ai_service.py` 中拆成独立 orchestrator，统一编排 context builder、Prompt v2、多智能体调用、strategist 输入 guard、JSON 解析、指标回写和预测持久化；同时保留 `AIService.generate_daily_report()` 作为兼容旧文章级入口，并补齐 `tests/test_report_orchestrator.py` 验证新主路径。
+  25. `EIL-503`：已新增 `src/services/report_run_tracker.py`，将 `report_runs` 与 `report_event_links` 的落库、trace 回放与最新报告追溯封装为独立 service；同时扩展 `src/services/report_repository.py` 增加 `list_report_runs()`，让 `report_orchestrator` 在 event-centric 报告生成成功后自动写回报告元信息、事件链接和状态变化追溯，并补齐 tracker / repository / orchestrator 三层测试。
 - 下一步:
-  1. `EIL-503`：补齐 report run 与 event/theme 引用写回，建立报告可追溯关系。
-  2. `EIL-504`：重接 engine / run_report / 调度入口，彻底切出旧文章级报告路径。
-  3. `EIL-602`：补齐统一回归评估 runner，为报告栈重接后的质量回归准备固定基线。
+  1. `EIL-504`：重接 engine / run_report / 调度入口，彻底切出旧文章级报告路径。
+  2. `EIL-602`：补齐统一回归评估 runner，为报告栈重接后的质量回归准备固定基线。
+  3. `EIL-603`：引入人工反馈与标注闭环，把 report trace 反接到后续调优链路。
 
 ---
 
@@ -612,7 +613,7 @@
   1. `.venv/bin/pytest tests/test_report_orchestrator.py` 通过（3 passed）。
   2. `.venv/bin/pytest tests/test_report_orchestrator.py tests/test_ai_service.py tests/test_report_context_builder.py tests/test_prompts.py tests/test_report_models.py` 通过（21 passed）。
 
-### [ ] EIL-503: `report_runs` 与事件追溯落库
+### [x] EIL-503: `report_runs` 与事件追溯落库
 
 - 主要模块: `src/services/report_repository.py`
 - 主要工作:
@@ -628,6 +629,14 @@
   1. 任一报告都能回溯到其事件输入集合。
   2. 报告元信息可用于后续评估和反馈。
   3. 报告可区分本次新增事件与延续事件更新。
+- 当前实现说明:
+  1. 已新增 `src/services/report_run_tracker.py`，提供 `record_completed_run()`、`get_report_trace()` 和 `get_latest_report_trace()`，把 event-centric `context_package + DailyReport + metrics` 写入 `report_runs` 与 `report_event_links`，并返回可直接消费的追溯视图。
+  2. 在不改 schema 的前提下，`report_runs.metadata` 已固定写入 `report_summary / context / budget / source_versions / coverage / report_metrics` 等结构化信息；`report_event_links.rationale` 则使用稳定 JSON 字符串承载 `state_change / render_mode / why_it_matters / brief refs / evidence refs / contradiction_count` 等事件入选理由。
+  3. `src/services/report_repository.py` 已补充 `list_report_runs()`，支持按 `profile / status / limit` 过滤最近报告；同 `report_date + profile` 已存在时，tracker 会走 update + replace links，兼容当前唯一约束，不额外修改表结构。
+  4. `src/services/report_orchestrator.py` 已支持可选注入 `report_run_tracker`，并在成功生成报告后自动保存 `last_report_trace`；同时 `src/services/report_context_builder.py` 补充了 `input_summary` 与 brief 标识透传，保证 report trace 能回放到具体 event brief / theme brief 版本。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_report_run_tracker.py tests/test_report_orchestrator.py tests/test_event_intelligence_repositories.py` 通过（17 passed）。
+  2. `.venv/bin/pytest tests/test_report_run_tracker.py tests/test_report_orchestrator.py tests/test_report_context_builder.py tests/test_ai_service.py tests/test_prompts.py tests/test_report_models.py` 通过（25 passed）。
 
 ### [ ] EIL-504: `engine` / `run_report` / 调度入口重接
 

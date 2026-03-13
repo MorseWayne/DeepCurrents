@@ -93,6 +93,41 @@ class ReportRepository:
         )
         return normalize_row(row)
 
+    async def list_report_runs(
+        self,
+        *,
+        profile: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        pool = ensure_pool(self._pool)
+        clauses: list[str] = []
+        values: list[Any] = []
+
+        if profile:
+            values.append(profile)
+            clauses.append(f"profile = ${len(values)}")
+        if status:
+            values.append(status)
+            clauses.append(f"status = ${len(values)}")
+
+        where_sql = ""
+        if clauses:
+            where_sql = "WHERE " + " AND ".join(clauses)
+
+        values.append(max(int(limit), 0))
+        rows = await pool.fetch(
+            f"""
+            SELECT *
+            FROM report_runs
+            {where_sql}
+            ORDER BY report_date DESC NULLS LAST, created_at DESC
+            LIMIT ${len(values)}
+            """,
+            *values,
+        )
+        return normalize_rows(rows)
+
     async def update_report_run(
         self, report_run_id: str, fields: Mapping[str, Any]
     ) -> dict[str, Any]:

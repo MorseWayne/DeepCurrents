@@ -164,6 +164,10 @@ class ReportContextBuilder:
         context_package = {
             "profile": profile,
             "token_budget": normalized_budget,
+            "input_summary": {
+                "event_count": len(event_briefs),
+                "theme_count": len(theme_briefs),
+            },
             "selected_event_briefs": selected_events,
             "selected_theme_briefs": selected_themes,
             "market_context": {
@@ -268,6 +272,7 @@ class ReportContextBuilder:
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         for row in event_briefs:
+            row_data = self._mapping(row)
             brief_json = self._brief_json(row)
             event_id = self._text(brief_json.get("eventId"))
             if not event_id:
@@ -280,6 +285,8 @@ class ReportContextBuilder:
             candidates.append(
                 {
                     "event_id": event_id,
+                    "brief_id": self._text(row_data.get("brief_id")),
+                    "brief_version": self._text(row_data.get("version")),
                     "brief_json": brief_json,
                     "primary_theme": primary_theme,
                     "primary_region": primary_region,
@@ -316,10 +323,11 @@ class ReportContextBuilder:
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         for row in theme_briefs:
+            row_data = self._mapping(row)
             brief_json = self._brief_json(row)
             theme_key = self._text(brief_json.get("themeKey"))
             if not theme_key:
-                theme_key = self._text(self._mapping(row).get("theme_key"))
+                theme_key = self._text(row_data.get("theme_key"))
             if not theme_key:
                 continue
             text = self._render_theme_brief(brief_json)
@@ -332,6 +340,8 @@ class ReportContextBuilder:
             candidates.append(
                 {
                     "theme_key": theme_key,
+                    "theme_brief_id": self._text(row_data.get("theme_brief_id")),
+                    "brief_version": self._text(row_data.get("version")),
                     "brief_json": brief_json,
                     "text": text,
                     "tokens": estimate_tokens(text),
@@ -413,6 +423,8 @@ class ReportContextBuilder:
             selected.append(
                 {
                     "event_id": event_id,
+                    "brief_id": self._text(candidate.get("brief_id")),
+                    "brief_version": self._text(candidate.get("brief_version")),
                     "render_mode": render_mode,
                     "token_count": token_count,
                     "primary_theme": primary_theme,
@@ -473,6 +485,8 @@ class ReportContextBuilder:
             selected.append(
                 {
                     "theme_key": theme_key,
+                    "theme_brief_id": self._text(candidate.get("theme_brief_id")),
+                    "brief_version": self._text(candidate.get("brief_version")),
                     "token_count": tokens,
                     "text": self._text(candidate.get("text")),
                     "brief_json": brief_json,
@@ -553,6 +567,8 @@ class ReportContextBuilder:
             selected_events.append(
                 {
                     "event_id": event_id,
+                    "brief_id": self._text(candidate.get("brief_id")),
+                    "brief_version": self._text(candidate.get("brief_version")),
                     "render_mode": render_mode,
                     "token_count": token_count,
                     "primary_theme": primary_theme,

@@ -91,21 +91,81 @@ class FakeAIService:
         self.persisted_reports.append(report)
 
 
+class FakeReportRunTracker:
+    def __init__(self):
+        self.calls: list[dict[str, Any]] = []
+
+    async def record_completed_run(
+        self,
+        *,
+        report: DailyReport,
+        context_package: dict[str, Any],
+        profile: str,
+        report_date: date | None = None,
+        version: str | None = None,
+        report_metrics: dict[str, Any] | None = None,
+        guard_stats: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "report": report,
+            "context_package": context_package,
+            "profile": profile,
+            "report_date": report_date,
+            "version": version,
+            "report_metrics": dict(report_metrics or {}),
+            "guard_stats": dict(guard_stats or {}),
+        }
+        self.calls.append(payload)
+        return {
+            "report_run": {
+                "report_run_id": "report_risk_daily_2026-03-13",
+                "profile": profile,
+                "report_date": report_date or date(2026, 3, 13),
+            },
+            "event_links": [
+                {
+                    "event_id": "evt_energy",
+                    "rationale_json": {
+                        "state_change": "escalated",
+                        "render_mode": "full",
+                        "brief_version": "v1",
+                    },
+                }
+            ],
+            "summary": {
+                "report_run_id": "report_risk_daily_2026-03-13",
+                "selected_event_ids": ["evt_energy"],
+                "state_change_mix": {"escalated": 1},
+            },
+        }
+
+
 class FakeReportContextBuilder:
     def __init__(self):
         self.build_context_calls: list[dict[str, Any]] = []
         self.build_context_from_services_calls: list[dict[str, Any]] = []
         self.context_package = {
+            "input_summary": {"event_count": 2, "theme_count": 1},
             "selected_event_briefs": [
                 {
                     "event_id": "evt_energy",
+                    "brief_id": "brief_evt_energy_v1",
+                    "brief_version": "v1",
                     "render_mode": "full",
-                    "brief_json": {"eventId": "evt_energy"},
+                    "brief_json": {
+                        "eventId": "evt_energy",
+                        "stateChange": "escalated",
+                        "whyItMatters": "Shipping disruption raises energy risk.",
+                        "lastTransition": {"toState": "escalating", "reason": "risk spread"},
+                        "evidenceRefs": ["art_1"],
+                    },
                 }
             ],
             "selected_theme_briefs": [
                 {
                     "theme_key": "energy",
+                    "theme_brief_id": "theme_brief_energy_2026-03-13_v1",
+                    "brief_version": "v1",
                     "brief_json": {"themeKey": "energy"},
                 }
             ],
@@ -115,7 +175,13 @@ class FakeReportContextBuilder:
                 "market_context_text": "[MARKET CONTEXT]\nTop movers up: CL=F (+1.40%)",
                 "combined_context_text": "[EVENT BRIEFS]\n- evt_energy\n\n[THEME BRIEFS]\n- energy\n\n[MARKET CONTEXT]\nTop movers up: CL=F (+1.40%)",
             },
-            "budget_summary": {"total_tokens": 320},
+            "budget_summary": {
+                "quota": {"event_budget_share": 0.65},
+                "event_tokens": 180,
+                "theme_tokens": 60,
+                "market_tokens": 80,
+                "total_tokens": 320,
+            },
             "coverage_summary": {"event_count": 1, "theme_count": 1},
             "truncation_summary": {
                 "dropped_event_ids": [],
@@ -249,3 +315,28 @@ async def test_report_orchestrator_builds_market_context_when_missing():
     )
 
     assert ai_service.market_context_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_report_orchestrator_records_report_trace_when_tracker_is_injected():
+    ai_service = FakeAIService()
+    builder = FakeReportContextBuilder()
+    tracker = FakeReportRunTracker()
+    orchestrator = ReportOrchestrator(ai_service, builder, report_run_tracker=tracker)
+
+    await orchestrator.generate_event_centric_report(
+        statuses=["new", "updated"],
+        profile="risk_daily",
+        report_date=date(2026, 3, 13),
+        version="v1",
+    )
+
+    assert len(tracker.calls) == 1
+    call = tracker.calls[0]
+    assert call["profile"] == "risk_daily"
+    assert call["version"] == "v1"
+    assert call["context_package"]["selected_event_briefs"][0]["brief_id"] == "brief_evt_energy_v1"
+    assert call["report_metrics"]["context_event_count"] == 1
+    assert call["guard_stats"]["post_guard_tokens"] > 0
+    assert orchestrator.last_report_trace["summary"]["report_run_id"] == "report_risk_daily_2026-03-13"
+    assert orchestrator.last_report_trace["event_links"][0]["rationale_json"]["brief_version"] == "v1"
