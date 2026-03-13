@@ -132,12 +132,23 @@ class Notifier:
                 md += f"- **{asset_class}** ({icon}{suffix})\n"
                 core_view = self._text(item.get("coreView"))
                 transmission_path = self._text(item.get("transmissionPath"))
+                pair_trade = self._text(item.get("pairTrade"))
+                scenario = self._report_mapping(item.get("scenarioAnalysis"))
                 key_drivers = self._text_list(item.get("keyDrivers"))
                 watch_signals = self._text_list(item.get("watchSignals"))
                 if core_view:
-                    md += f"  核心观点: {core_view}\n"
+                    md += f"  > 核心观点: {core_view}\n"
                 if transmission_path:
                     md += f"  传导路径: {transmission_path}\n"
+                if pair_trade:
+                    md += f"  💡 **配对建议**: `{pair_trade}`\n"
+                if scenario:
+                    bull = self._text(scenario.get("bullCase"))
+                    bear = self._text(scenario.get("bearCase"))
+                    if bull or bear:
+                        md += "  🔭 **场景推演**:\n"
+                        if bull: md += f"    - 🟢 Bull: {bull}\n"
+                        if bear: md += f"    - 🔴 Bear: {bear}\n"
                 if key_drivers:
                     md += f"  驱动: {'、'.join(key_drivers[:4])}\n"
                 if watch_signals:

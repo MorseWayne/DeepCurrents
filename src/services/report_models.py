@@ -21,11 +21,18 @@ class MacroTransmissionChain(BaseModel):
     confidence: Optional[float] = Field(None, ge=0, le=100)
 
 
+class ScenarioAnalysis(BaseModel):
+    bullCase: Optional[str] = None
+    bearCase: Optional[str] = None
+
+
 class AssetTransmissionBreakdown(BaseModel):
     assetClass: str
     trend: Literal["Bullish", "Bearish", "Neutral"]
     coreView: str
     transmissionPath: str
+    pairTrade: Optional[str] = None
+    scenarioAnalysis: Optional[ScenarioAnalysis] = None
     keyDrivers: List[str] = Field(default_factory=list)
     watchSignals: List[str] = Field(default_factory=list)
     timeframe: Optional[str] = None

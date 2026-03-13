@@ -836,15 +836,22 @@ class ReportOrchestrator:
 
     def _is_sparse_asset_breakdowns(self, value: Any) -> bool:
         items = self._sequence_of_mappings(value)
-        if len(items) < 2:
+        if not items:
             return True
 
         informative_count = 0
         for item in items:
             core_view = self._text(item.get("coreView"))
             path = self._text(item.get("transmissionPath"))
-            if core_view and path:
+            pair_trade = self._text(item.get("pairTrade"))
+            scenario = self._mapping(item.get("scenarioAnalysis"))
+            
+            # 如果提供了配对交易或场景推演，即视为极具价值的信息
+            if pair_trade or scenario.get("bullCase") or scenario.get("bearCase"):
+                informative_count += 2 # 加倍权重
+            elif core_view and path:
                 informative_count += 1
+                
         return informative_count < 2
 
     def _fallback_market_pricing(
