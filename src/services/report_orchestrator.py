@@ -115,7 +115,7 @@ class ReportOrchestrator:
         evidence_limit: int = 4,
         report_date: date | None = None,
         version: str | None = None,
-    ) -> DailyReport:
+    ) -> DailyReport | None:
         self.last_context_package = {}
         self.last_report_guard_stats = {}
         self.last_report_metrics = {}
@@ -148,6 +148,22 @@ class ReportOrchestrator:
                 report_date=report_date,
                 version=version,
             )
+
+        selected_events = self._sequence_of_mappings(
+            context_package.get("selected_event_briefs")
+        )
+        selected_themes = self._sequence_of_mappings(
+            context_package.get("selected_theme_briefs")
+        )
+        if not selected_events and not selected_themes:
+            self.last_context_package = dict(context_package)
+            self.last_report_metrics = self._build_empty_report_metrics(
+                context_package=context_package,
+                profile=profile,
+            )
+            self.ai_service.last_report_guard_stats = {}
+            self.ai_service.last_report_metrics = dict(self.last_report_metrics)
+            return None
 
         prompt_sections = self._mapping(context_package.get("prompt_sections"))
         combined_context_text = self._text(prompt_sections.get("combined_context_text"))
@@ -220,6 +236,34 @@ class ReportOrchestrator:
                 guard_stats=guard_stats,
             )
         return report
+
+    def _build_empty_report_metrics(
+        self,
+        *,
+        context_package: Mapping[str, Any],
+        profile: str,
+    ) -> dict[str, Any]:
+        selected_events = self._sequence_of_mappings(
+            context_package.get("selected_event_briefs")
+        )
+        selected_themes = self._sequence_of_mappings(
+            context_package.get("selected_theme_briefs")
+        )
+        metrics = build_report_metrics(
+            raw_news_input_count=0,
+            cluster_count=len(selected_themes),
+            report_generated=False,
+            investment_trend_count=0,
+            guard_stats={},
+        )
+        metrics.update(
+            {
+                "profile": profile,
+                "context_event_count": len(selected_events),
+                "context_theme_count": len(selected_themes),
+            }
+        )
+        return metrics
 
     async def _resolve_market_context(self, market_context: Any) -> Any:
         if market_context is None:

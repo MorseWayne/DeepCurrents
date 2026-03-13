@@ -340,3 +340,40 @@ async def test_report_orchestrator_records_report_trace_when_tracker_is_injected
     assert call["guard_stats"]["post_guard_tokens"] > 0
     assert orchestrator.last_report_trace["summary"]["report_run_id"] == "report_risk_daily_2026-03-13"
     assert orchestrator.last_report_trace["event_links"][0]["rationale_json"]["brief_version"] == "v1"
+
+
+@pytest.mark.asyncio
+async def test_report_orchestrator_skips_generation_when_context_is_empty():
+    ai_service = FakeAIService()
+    builder = FakeReportContextBuilder()
+    builder.context_package = {
+        **builder.context_package,
+        "selected_event_briefs": [],
+        "selected_theme_briefs": [],
+        "coverage_summary": {"event_count": 0, "theme_count": 0},
+        "budget_summary": {
+            "quota": {"event_budget_share": 0.65},
+            "event_tokens": 0,
+            "theme_tokens": 0,
+            "market_tokens": 80,
+            "total_tokens": 80,
+        },
+        "prompt_sections": {
+            "event_briefs_text": "",
+            "theme_briefs_text": "",
+            "market_context_text": "[MARKET CONTEXT]\nTop movers up: CL=F (+1.40%)",
+            "combined_context_text": "[MARKET CONTEXT]\nTop movers up: CL=F (+1.40%)",
+        },
+    }
+    orchestrator = ReportOrchestrator(ai_service, builder)
+
+    report = await orchestrator.generate_event_centric_report(
+        statuses=["updated"],
+        profile="macro_daily",
+    )
+
+    assert report is None
+    assert ai_service.agent_calls == []
+    assert ai_service.persisted_reports == []
+    assert orchestrator.last_report_metrics["report_generated"] is False
+    assert orchestrator.last_report_metrics["context_event_count"] == 0

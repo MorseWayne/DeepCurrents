@@ -11,7 +11,7 @@
 ## 0. 开发进度
 
 - 更新时间: 2026-03-13
-- 当前批次: `Batch 5`
+- 当前批次: `Batch 6`
 - 已完成:
   1. `EIL-000`：已落地 `tests/fixtures/event_intelligence/`、`tests/evaluation/fixture_loader.py`、`tests/test_event_intelligence_fixture_loader.py`，固定三类评估样本并提供可重复加载入口。
   2. `EIL-001`：已在 `src/config/settings.py` 增加 Event Intelligence runtime 配置项，在 `src/services/event_intelligence_bootstrap.py` 建立最小 bootstrap 骨架，并接入 `src/engine.py` / `src/run_report.py` 的共享启动路径。
@@ -38,10 +38,11 @@
   23. `EIL-501`：已新增 `src/services/report_models.py`，将 `DailyReport` 及其相关输出模型从 `ai_service.py` 中抽离，并补充 `MacroAnalystOutput`、`SentimentAnalystOutput` 两个 v2 agent 输出 schema；同时重写 `src/services/prompts.py`，新增 event-centric Prompt v2 和 3 个输入拼装 helper，并保持旧 prompt 常量与 `ai_service` 顶层导出兼容。
   24. `EIL-502`：已新增 `src/services/report_orchestrator.py`，把 event-centric report flow 从 `ai_service.py` 中拆成独立 orchestrator，统一编排 context builder、Prompt v2、多智能体调用、strategist 输入 guard、JSON 解析、指标回写和预测持久化；同时保留 `AIService.generate_daily_report()` 作为兼容旧文章级入口，并补齐 `tests/test_report_orchestrator.py` 验证新主路径。
   25. `EIL-503`：已新增 `src/services/report_run_tracker.py`，将 `report_runs` 与 `report_event_links` 的落库、trace 回放与最新报告追溯封装为独立 service；同时扩展 `src/services/report_repository.py` 增加 `list_report_runs()`，让 `report_orchestrator` 在 event-centric 报告生成成功后自动写回报告元信息、事件链接和状态变化追溯，并补齐 tracker / repository / orchestrator 三层测试。
+  26. `EIL-504`：已在 `src/engine.py` 完成 event-centric report stack runtime wiring，并将 `generate_and_send_report()` 切换到 `report_orchestrator` 主路径；同时基于最近一次 `completed report_run` 计算增量 `since` 窗口，使 `run_report.py` 与 `main.py` 继续通过统一的 `engine.generate_and_send_report()` 入口复用新链路，而不再触发旧文章级 `AIService.generate_daily_report()`；另外在 `src/services/report_orchestrator.py` 增加空上下文短路逻辑，并通过 `tests/test_engine.py`、`tests/test_report_orchestrator.py`、`tests/test_run_report.py` 固化“无增量事件直接跳过”的行为。
 - 下一步:
-  1. `EIL-504`：重接 engine / run_report / 调度入口，彻底切出旧文章级报告路径。
-  2. `EIL-602`：补齐统一回归评估 runner，为报告栈重接后的质量回归准备固定基线。
-  3. `EIL-603`：引入人工反馈与标注闭环，把 report trace 反接到后续调优链路。
+  1. `EIL-602`：补齐统一回归评估 runner，为报告栈重接后的质量回归准备固定基线。
+  2. `EIL-603`：引入人工反馈与标注闭环，把 report trace 反接到后续调优链路。
+  3. `EIL-604`：删除旧文章级正式主链路并完成文档清理。
 
 ---
 
@@ -638,7 +639,7 @@
   1. `.venv/bin/pytest tests/test_report_run_tracker.py tests/test_report_orchestrator.py tests/test_event_intelligence_repositories.py` 通过（17 passed）。
   2. `.venv/bin/pytest tests/test_report_run_tracker.py tests/test_report_orchestrator.py tests/test_report_context_builder.py tests/test_ai_service.py tests/test_prompts.py tests/test_report_models.py` 通过（25 passed）。
 
-### [ ] EIL-504: `engine` / `run_report` / 调度入口重接
+### [x] EIL-504: `engine` / `run_report` / 调度入口重接
 
 - 主要模块: `src/engine.py`、`src/run_report.py`、`src/main.py`
 - 主要工作:
@@ -654,6 +655,14 @@
   1. 新链路可端到端生成结构化日报。
   2. CLI 与调度入口不再调用旧文章级报告路径。
   3. 无增量变化的长期事件不会在日报中被重复展开。
+- 当前实现说明:
+  1. `src/engine.py` 已新增 event-centric report stack runtime wiring，在 runtime stores 就绪后装配 `EventQueryService`、`EventRanker`、`EvidenceSelector`、`EventSummarizer`、`ThemeSummarizer`、`ReportContextBuilder`、`ReportRunTracker` 与 `ReportOrchestrator`，并将其与 ingestion wiring 分离，避免报告装配失败影响采集主路径。
+  2. `DeepCurrentsEngine.generate_and_send_report()` 已不再读取 `raw_news`、执行标题级 threat/classification clustering 或调用旧 `AIService.generate_daily_report()`；新主路径改为基于固定状态集合与最近一次 `completed report_run` 的 `updated_at / created_at / report_date` 计算增量 `since` 窗口，再调用 `ReportOrchestrator.generate_event_centric_report()` 生成日报。
+  3. `src/services/report_orchestrator.py` 已新增空上下文短路逻辑：当 `ReportContextBuilder` 选不出任何 event/theme briefs 时，直接返回 `None` 并暴露 `report_generated=false` 指标，保证“无增量变化”的长期事件不会被重复展开，也不会触发 LLM 调用、通知推送或 trace 落库。
+  4. `src/run_report.py` 与 `src/main.py` 继续统一调用 `engine.generate_and_send_report()`；随着 `engine` 内部切换，CLI 与调度入口已天然共享同一条 event-centric 报告链路。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_engine.py tests/test_report_orchestrator.py tests/test_run_report.py` 通过（17 passed）。
+  2. `.venv/bin/pytest tests/test_event_intelligence_bootstrap.py tests/test_report_run_tracker.py` 通过（11 passed）。
 
 ---
 
