@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -248,11 +249,17 @@ async def test_event_ranker_ranks_high_impact_event_above_low_value_single_sourc
         ],
     )
 
-    ranked = await ranker.rank_events(statuses=["active", "updated"], limit=5)
+    with patch("src.services.event_ranker.log_stage_metrics") as mock_log_metrics:
+        ranked = await ranker.rank_events(statuses=["active", "updated"], limit=5)
 
     assert [item["event_id"] for item in ranked] == ["evt_high", "evt_low"]
     assert ranked[0]["total_score"] > ranked[1]["total_score"]
     assert query_service.list_calls[0]["limit"] == 5
+    mock_log_metrics.assert_called_once()
+    logged_metrics = mock_log_metrics.call_args.args[2]
+    assert logged_metrics["events_considered"] == 2
+    assert logged_metrics["events_ranked"] == 2
+    assert logged_metrics["single_source_event_ratio"] == pytest.approx(0.5)
 
 
 @pytest.mark.asyncio

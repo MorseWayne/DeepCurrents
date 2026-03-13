@@ -22,11 +22,16 @@ async def engine():
 
 @pytest.mark.asyncio
 async def test_engine_collect_data(engine):
-    engine.collector.collect_all = AsyncMock(return_value={"new_items": 5, "errors": 0})
+    engine.collector.collect_all = AsyncMock(
+        return_value={"new_items": 5, "errors": 0, "articles_inserted": 5}
+    )
 
-    await engine.collect_data()
+    with patch("src.engine.log_stage_metrics") as mock_log_metrics:
+        await engine.collect_data()
 
     engine.collector.collect_all.assert_called_once()
+    mock_log_metrics.assert_called_once()
+    assert mock_log_metrics.call_args.args[1] == "ingestion"
 
 
 @pytest.mark.asyncio
@@ -78,14 +83,34 @@ async def test_engine_generate_report_flow(engine):
         ]
     )
     engine.ai.generate_daily_report = AsyncMock(
-        return_value=MagicMock(date="2026-03-12")
+        return_value=MagicMock(date="2026-03-12", investmentTrends=[])
     )
+    engine.ai.last_report_metrics = {
+        "raw_news_input_count": 1,
+        "cluster_count": 1,
+        "report_generated": True,
+        "investment_trend_count": 0,
+        "guard_pre_tokens": 100,
+        "guard_post_tokens": 80,
+        "trimmed_sections": ["cluster"],
+        "budget_truncation_rate": 0.2,
+        "final_hard_cap_hit": False,
+    }
+    engine.ai.last_report_guard_stats = {
+        "pre_guard_tokens": 100,
+        "post_guard_tokens": 80,
+        "trimmed_sections": ["cluster"],
+    }
     engine.db.mark_as_reported = AsyncMock()
 
-    await engine.generate_and_send_report()
+    with patch("src.engine.log_stage_metrics") as mock_log_metrics:
+        await engine.generate_and_send_report()
 
     engine.ai.generate_daily_report.assert_called_once()
     engine.db.mark_as_reported.assert_called_once()
+    mock_log_metrics.assert_called_once()
+    assert mock_log_metrics.call_args.args[1] == "report"
+    assert mock_log_metrics.call_args.args[2]["report_generated"] is True
 
 
 @pytest.mark.asyncio

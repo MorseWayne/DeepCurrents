@@ -11,6 +11,7 @@ from ..config.asset_symbols import resolve_asset_symbol, get_default_market_symb
 from .db_service import DBService, NewsRecord
 from .clustering import ClusteredEvent, generate_cluster_context
 from .classifier import THREAT_LABELS
+from .metrics import build_report_metrics
 from ..utils.market_data import get_market_price, search_market_symbol
 from ..utils.logger import get_logger
 from .prompts import MACRO_ANALYST_PROMPT, SENTIMENT_ANALYST_PROMPT, MARKET_STRATEGIST_PROMPT
@@ -158,6 +159,8 @@ class AIService:
         self.client = AsyncOpenAI(api_key=CONFIG.ai_api_key, base_url=CONFIG.ai_api_url.replace('/chat/completions', ''))
         self._asset_symbol_cache: Dict[str, Optional[str]] = {}
         self._window_cache: Dict[str, Dict[str, Any]] = {}
+        self.last_report_guard_stats: Dict[str, Any] = {}
+        self.last_report_metrics: Dict[str, Any] = {}
 
     @staticmethod
     def _to_text(value: Any) -> str:
@@ -661,6 +664,8 @@ class AIService:
         clusters: List[ClusteredEvent] = None
     ) -> DailyReport:
         """多智能体研报生成流"""
+        self.last_report_guard_stats = {}
+        self.last_report_metrics = {}
         shared_window, provider_windows = await self._resolve_shared_context_window()
         budget = self._compute_input_budget(shared_window)
         usable_input = budget["usable_input"]
@@ -723,6 +728,14 @@ class AIService:
         final_raw = await self.call_agent("MarketStrategist", MARKET_STRATEGIST_PROMPT, final_strategist_input, use_json=True)
         parsed_json = await self.parse_daily_report_json(final_raw)
         report = DailyReport(**parsed_json)
+        self.last_report_guard_stats = dict(guard_stats)
+        self.last_report_metrics = build_report_metrics(
+            raw_news_input_count=len(news_list),
+            cluster_count=len(clusters or []),
+            report_generated=True,
+            investment_trend_count=len(report.investmentTrends),
+            guard_stats=guard_stats,
+        )
         
         # 写入预测闭环（失败不影响主流程）
         await self._persist_predictions(report)

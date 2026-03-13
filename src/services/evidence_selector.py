@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 import re
 from typing import Any, Protocol
 
+from ..utils.logger import get_logger
+from .metrics import build_evidence_metrics, log_stage_metrics
 
 QUANT_SIGNAL_RE = re.compile(
     r"\b\d+(?:\.\d+)?(?:%|bp|bps|m|mn|bn|million|billion|trillion|mbpd)?\b",
@@ -47,6 +49,8 @@ SCORE_FIELDS = (
     "uncertainty_score",
     "total_score",
 )
+
+logger = get_logger("evidence-selector")
 
 
 @dataclass(frozen=True)
@@ -127,6 +131,7 @@ class EvidenceSelector:
         self.selection_version = selection_version
         self.max_keywords = max(max_keywords, 1)
         self.max_entities = max(max_entities, 1)
+        self.last_evidence_metrics: dict[str, Any] = {}
 
     async def select_event_evidence(
         self,
@@ -137,11 +142,23 @@ class EvidenceSelector:
     ) -> dict[str, Any]:
         scored = await self.event_ranker.score_event(event_id, profile=profile)
         timeline = await self.event_query_service.get_event_timeline(event_id)
-        return await self._build_evidence_package(
+        package = await self._build_evidence_package(
             timeline=timeline,
             scored_event=scored,
             limit=self.default_limit if limit is None else max(limit, 0),
         )
+        self.last_evidence_metrics = build_evidence_metrics(
+            [package],
+            profile=profile,
+            events_considered=1,
+        )
+        log_stage_metrics(
+            logger,
+            "evidence",
+            self.last_evidence_metrics,
+            service="EvidenceSelector.select_event_evidence",
+        )
+        return package
 
     async def select_ranked_event_evidence(
         self,
@@ -173,6 +190,17 @@ class EvidenceSelector:
                     limit=max(per_event_limit, 0),
                 )
             )
+        self.last_evidence_metrics = build_evidence_metrics(
+            packages,
+            profile=profile,
+            events_considered=len(ranked_events),
+        )
+        log_stage_metrics(
+            logger,
+            "evidence",
+            self.last_evidence_metrics,
+            service="EvidenceSelector.select_ranked_event_evidence",
+        )
         return packages
 
     async def _build_evidence_package(

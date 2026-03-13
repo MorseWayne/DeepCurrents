@@ -3,8 +3,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, Protocol, Sequence
 
+from ..utils.logger import get_logger
+from .metrics import build_ranking_metrics, log_stage_metrics
 from .scoring_profiles import ScoringProfile, get_scoring_profile
 
+logger = get_logger("event-ranker")
 
 THREAT_EVENT_TYPES = {"conflict", "supply_disruption"}
 HIGH_IMPACT_EVENT_TYPES = {
@@ -78,6 +81,7 @@ class EventRanker:
         self.article_repository = article_repository
         self.event_query_service = event_query_service
         self.reference_now = reference_now
+        self.last_ranking_metrics: dict[str, Any] = {}
 
     async def score_event(
         self,
@@ -151,7 +155,19 @@ class EventRanker:
         ranked.sort(
             key=lambda item: (-item["total_score"], self._text(item.get("event_id")))
         )
-        return ranked[:limit]
+        ranked = ranked[:limit]
+        self.last_ranking_metrics = build_ranking_metrics(
+            ranked,
+            profile=scoring_profile.name,
+            events_considered=len(event_items),
+        )
+        log_stage_metrics(
+            logger,
+            "ranking",
+            self.last_ranking_metrics,
+            service="EventRanker.rank_events",
+        )
+        return ranked
 
     async def _build_score_payload(
         self,

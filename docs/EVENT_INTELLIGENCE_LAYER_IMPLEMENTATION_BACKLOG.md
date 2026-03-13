@@ -30,10 +30,11 @@
   15. `EIL-301`：已新增 `src/services/event_ranker.py`，完成 `threat_score / market_impact_score / novelty_score / corroboration_score / source_quality_score / velocity_score / uncertainty_score` 七维规则版打分、`macro_daily` 总分聚合和 `event_scores` 持久化，并通过 `tests/test_event_ranker.py` 固化高影响事件优先、单源冲突事件降权和分数写入契约。
   16. `EIL-302`：已新增 `src/services/scoring_profiles.py`，将 `macro_daily / risk_daily / strategy_am` 三套 scoring profile 从 `event_ranker` 中抽离，并把 explainability 收敛为 `profile / dimension_scores / weighted_contributions / top_drivers / risk_flags / event_facts` 的稳定结构；同时补齐 `tests/test_event_ranker.py`，验证不同 profile 下排序差异可复现、解释结构完整、未知 profile 明确报错。
   17. `EIL-303`：已新增 `src/services/evidence_selector.py`，完成文章级 evidence package 选择器，按高 Tier、独立信源、数字/政策信号和覆盖多样性为事件压缩 supporting / contradicting 证据，并在有冲突叙事时保留反方证据位；同时补齐 `tests/test_evidence_selector.py`，验证去冗余、冲突保留和按排序结果批量生成证据包的契约。
+  18. `EIL-601`：已新增 `src/services/metrics.py`，建立 ingestion / ranking / evidence / report 四阶段指标汇总与结构化日志 helper，并在 `collector`、`event_ranker`、`evidence_selector`、`ai_service`、`engine` 接入运行时指标输出；同时补齐 `tests/test_metrics.py` 及相关服务测试，固定压缩率、单源比例、冲突保留率和 report budget 指标契约。
 - 下一步:
-  1. `EIL-601`：补齐运行指标与结构化日志，让 Batch 3 的排序与证据 ticket 能直接基于可观测指标验收。
-  2. `EIL-401`：开始构建 `event_brief` 生成链路，把排序与证据包转成可复用的摘要单元。
-  3. `EIL-402`：在 `event_brief` 稳定后推进 `theme_brief` 聚合层，减少上层 AI 直接读事件卡的负担。
+  1. `EIL-401`：开始构建 `event_brief` 生成链路，把排序、证据包和结构化 metrics 输出转成可复用的摘要单元。
+  2. `EIL-402`：在 `event_brief` 稳定后推进 `theme_brief` 聚合层，减少上层 AI 直接读事件卡的负担。
+  3. `EIL-403`：补齐 `report_context_builder`，把 event/theme brief 压成最终 report 输入层。
 
 ---
 
@@ -435,7 +436,7 @@
   2. `.venv/bin/pytest tests/test_evidence_selector.py tests/test_event_ranker.py tests/test_event_query_service.py` 通过（11 passed）。
   3. `.venv/bin/pytest tests/test_event_enrichment.py` 通过（3 passed）。
 
-### [ ] EIL-601: 运行指标与结构化日志
+### [x] EIL-601: 运行指标与结构化日志
 
 - 主要模块: `src/services/metrics.py`、`src/engine.py`
 - 主要工作:
@@ -449,6 +450,14 @@
 - 验收标准:
   1. 每次运行都能输出核心质量计数。
   2. 指标字段与设计文档保持一致。
+- 当前实现说明:
+  1. `src/services/metrics.py` 已新增 `safe_ratio()`、阶段指标 builder 和 `log_stage_metrics()`，统一输出 `pipeline_metrics` 结构化日志事件。
+  2. `src/services/collector.py` 现已返回扩展 ingestion metrics，包括 `articles_seen / articles_inserted / duplicate_refreshes / cheap_dedup_links / semantic_dedup_links / events_created / events_updated / events_touched / article_to_event_compression_ratio`，同时保留 `new_items / errors / skipped` 兼容字段。
+  3. `src/services/event_ranker.py` 与 `src/services/evidence_selector.py` 已分别接入 `ranking`、`evidence` 阶段指标输出，并保留最近一次 `last_ranking_metrics` / `last_evidence_metrics` 快照，便于测试和后续调试。
+  4. `src/services/ai_service.py` 已保存最近一次 report guard/budget metrics；`src/engine.py` 已在 `collect_data()` 和 `generate_and_send_report()` 输出 `ingestion`、`report` 阶段结构化日志，而不新增数据库持久化或额外 sidecar 计算。
+- 验证记录:
+  1. `.venv/bin/pytest tests/test_metrics.py tests/test_collector.py tests/test_event_ranker.py tests/test_evidence_selector.py tests/test_engine.py tests/test_ai_service.py` 通过（35 passed）。
+  2. `.venv/bin/pytest tests/test_event_builder.py tests/test_event_state_machine.py tests/test_event_enrichment.py tests/test_event_query_service.py tests/test_event_intelligence_repositories.py tests/test_semantic_deduper.py` 通过（30 passed）。
 
 ---
 

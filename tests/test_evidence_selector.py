@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any, Sequence
+from unittest.mock import patch
 
 import pytest
 
@@ -389,6 +390,9 @@ async def test_evidence_selector_preserves_contradicting_evidence_when_conflict_
     assert "contradicting_narrative" in package["contradicting_evidence"][0]["selection_reasons"]
     assert len(package["supporting_evidence"]) == 2
     assert any("retained 1 contradicting articles" in note for note in package["coverage_notes"])
+    assert selector.last_evidence_metrics["contradiction_retention_rate"] == pytest.approx(
+        1.0
+    )
 
 
 @pytest.mark.asyncio
@@ -473,15 +477,21 @@ async def test_evidence_selector_builds_packages_for_ranked_events_in_rank_order
         },
     ]
 
-    packages = await selector.select_ranked_event_evidence(
-        statuses=["active", "updated", "escalating"],
-        profile="risk_daily",
-        per_event_limit=1,
-        limit=2,
-    )
+    with patch("src.services.evidence_selector.log_stage_metrics") as mock_log_metrics:
+        packages = await selector.select_ranked_event_evidence(
+            statuses=["active", "updated", "escalating"],
+            profile="risk_daily",
+            per_event_limit=1,
+            limit=2,
+        )
 
     assert [item["event_id"] for item in packages] == ["evt_1", "evt_2"]
     assert packages[0]["event_score"]["profile"] == "risk_daily"
     assert packages[0]["supporting_evidence"][0]["article_id"] == "art_1"
     assert packages[1]["supporting_evidence"][0]["article_id"] == "art_2"
     assert ranker.rank_calls[0]["profile"] == "risk_daily"
+    mock_log_metrics.assert_called_once()
+    logged_metrics = mock_log_metrics.call_args.args[2]
+    assert logged_metrics["events_considered"] == 2
+    assert logged_metrics["event_card_entry_ratio"] == pytest.approx(1.0)
+    assert logged_metrics["evidence_compression_ratio"] == pytest.approx(1.0)

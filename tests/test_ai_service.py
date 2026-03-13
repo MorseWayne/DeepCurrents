@@ -36,6 +36,10 @@ async def test_generate_daily_report(mock_db):
                 assert isinstance(report, DailyReport)
                 assert report.date == "2026-03-12"
                 assert report.executiveSummary == "Summary"
+                assert ai_service.last_report_metrics["report_generated"] is True
+                assert ai_service.last_report_metrics["raw_news_input_count"] == 1
+                assert ai_service.last_report_metrics["cluster_count"] == 0
+                assert ai_service.last_report_metrics["guard_pre_tokens"] >= ai_service.last_report_metrics["guard_post_tokens"]
 
 @pytest.mark.asyncio
 async def test_generate_daily_report_with_json_repair(mock_db):

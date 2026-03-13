@@ -12,6 +12,7 @@ from .services.event_intelligence_bootstrap import (
     EventIntelligenceBootstrap,
     EventIntelligenceRuntimeState,
 )
+from .services.metrics import build_report_metrics, default_ingestion_metrics, log_stage_metrics
 from .utils.logger import get_logger
 
 logger = get_logger("engine")
@@ -115,18 +116,50 @@ class DeepCurrentsEngine:
         """执行数据采集任务"""
         try:
             stats = await self.collector.collect_all()
+            log_stage_metrics(
+                logger,
+                "ingestion",
+                stats,
+                service="DeepCurrentsEngine.collect_data",
+                event_intelligence_enabled=self.collector._event_intelligence_enabled(),
+            )
             logger.info(f"采集完成: {stats}")
         except Exception as e:
+            log_stage_metrics(
+                logger,
+                "ingestion",
+                default_ingestion_metrics(),
+                service="DeepCurrentsEngine.collect_data",
+                event_intelligence_enabled=self.collector._event_intelligence_enabled(),
+                error=str(e),
+            )
             logger.error(f"采集任务失败: {e}")
 
     async def generate_and_send_report(
         self, skip_push: bool = False, skip_mark: bool = False
     ):
         """生成并发送研报"""
+        raw_news_count = 0
+        cluster_count = 0
         try:
             # 1. 获取未报告新闻
             raw_news = await self.db.get_unreported_news()
+            raw_news_count = len(raw_news)
             if not raw_news:
+                log_stage_metrics(
+                    logger,
+                    "report",
+                    build_report_metrics(
+                        raw_news_input_count=0,
+                        cluster_count=0,
+                        report_generated=False,
+                        investment_trend_count=0,
+                    ),
+                    service="DeepCurrentsEngine.generate_and_send_report",
+                    reason="no_raw_news",
+                    skip_push=skip_push,
+                    skip_mark=skip_mark,
+                )
                 logger.info("没有新的新闻需要报告。")
                 return None
 
@@ -148,10 +181,36 @@ class DeepCurrentsEngine:
                 )
 
             clusters = cluster_news(items_for_clustering)
+            cluster_count = len(clusters)
 
             # 3. 生成 AI 研报
             report = await self.ai.generate_daily_report(raw_news, clusters)
             logger.info(f"成功生成研报: {report.date}")
+            report_metrics = (
+                dict(self.ai.last_report_metrics)
+                if self.ai.last_report_metrics
+                else build_report_metrics(
+                    raw_news_input_count=raw_news_count,
+                    cluster_count=cluster_count,
+                    report_generated=report is not None,
+                    investment_trend_count=len(getattr(report, "investmentTrends", []) or []),
+                    guard_stats=self.ai.last_report_guard_stats,
+                )
+            )
+            report_metrics["raw_news_input_count"] = raw_news_count
+            report_metrics["cluster_count"] = cluster_count
+            report_metrics["report_generated"] = report is not None
+            report_metrics["investment_trend_count"] = len(
+                getattr(report, "investmentTrends", []) or []
+            )
+            log_stage_metrics(
+                logger,
+                "report",
+                report_metrics,
+                service="DeepCurrentsEngine.generate_and_send_report",
+                skip_push=skip_push,
+                skip_mark=skip_mark,
+            )
 
             # 4. 推送通知
             if not skip_push:
@@ -166,6 +225,21 @@ class DeepCurrentsEngine:
 
             return report
         except Exception as e:
+            log_stage_metrics(
+                logger,
+                "report",
+                build_report_metrics(
+                    raw_news_input_count=raw_news_count,
+                    cluster_count=cluster_count,
+                    report_generated=False,
+                    investment_trend_count=0,
+                    guard_stats=self.ai.last_report_guard_stats,
+                ),
+                service="DeepCurrentsEngine.generate_and_send_report",
+                skip_push=skip_push,
+                skip_mark=skip_mark,
+                error=str(e),
+            )
             logger.error(f"研报生成任务失败: {e}")
             return None
 

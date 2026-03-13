@@ -7,6 +7,7 @@ from ..config.sources import SOURCES, Source, resolve_source_url
 from .circuit_breaker import RSSCircuitBreaker
 from .db_service import DBService
 from .article_models import ArticleRecord
+from .metrics import default_ingestion_metrics, safe_ratio
 from ..utils.extractor import Extractor
 from ..utils.logger import get_logger
 
@@ -101,7 +102,7 @@ class RSSCollector:
             and self.article_feature_extractor is not None
         )
 
-    async def collect_all(self) -> Dict[str, int]:
+    async def collect_all(self) -> Dict[str, Any]:
         """执行全量抓取任务"""
         logger.info("开始扫描全球动态...")
 
@@ -118,31 +119,41 @@ class RSSCollector:
             ]
             results = await asyncio.gather(*tasks)
 
-        total_new = sum(r.get("new_count", 0) for r in results)
+        metrics = default_ingestion_metrics(sources_total=len(sorted_sources))
+        total_new = sum(self._safe_int(r.get("new_count")) for r in results)
         total_errors = sum(1 for r in results if "error" in r)
         total_skipped = sum(1 for r in results if r.get("skipped"))
+
+        metrics["sources_skipped"] = total_skipped
+        metrics["sources_failed"] = total_errors
+        for result in results:
+            self._merge_ingestion_metrics(metrics, result)
+        metrics["new_items"] = total_new
+        metrics["errors"] = total_errors
+        metrics["skipped"] = total_skipped
+        metrics["article_to_event_compression_ratio"] = safe_ratio(
+            self._safe_int(metrics.get("events_touched")),
+            self._safe_int(metrics.get("articles_inserted")),
+        )
 
         logger.info(
             f"[采集完成] 新增 {total_new} | 跳过 {total_skipped} | 错误 {total_errors}"
         )
 
-        return {
-            "new_items": total_new,
-            "errors": total_errors,
-            "skipped": total_skipped,
-        }
+        return metrics
 
     async def fetch_source(
         self, source: Source, session: Optional[aiohttp.ClientSession] = None
     ) -> Dict[str, Any]:
         """抓取单个源"""
         if self.breaker.is_on_cooldown(source.name):
-            return {"skipped": True}
+            return {"skipped": True, **self._empty_source_metrics()}
 
         async with self.semaphore:
             managed_session = session is None
             active_session = session or aiohttp.ClientSession()
             request_timeout = aiohttp.ClientTimeout(total=CONFIG.rss_timeout_ms / 1000)
+            source_metrics = self._empty_source_metrics()
             try:
                 url = resolve_source_url(source)
                 proxy = CONFIG.https_proxy if CONFIG.https_proxy else None
@@ -201,6 +212,7 @@ class RSSCollector:
                     title = raw_title.strip() if isinstance(raw_title, str) else ""
                     if not link or not title:
                         continue
+                    source_metrics["articles_seen"] += 1
 
                     # 提取内容
                     raw_summary = entry.get("summary", "") or entry.get(
@@ -228,7 +240,7 @@ class RSSCollector:
                     )
 
                     if self._event_intelligence_enabled():
-                        inserted = await self._ingest_event_intelligence_article(
+                        ingest_result = await self._ingest_event_intelligence_article(
                             link=link,
                             title=title,
                             summary=summary,
@@ -236,6 +248,8 @@ class RSSCollector:
                             source=source,
                             published=published,
                         )
+                        inserted = bool(ingest_result.get("inserted"))
+                        self._merge_ingestion_metrics(source_metrics, ingest_result)
                     else:
                         inserted = await self._save_legacy_news(
                             link=link,
@@ -243,6 +257,7 @@ class RSSCollector:
                             content=final_content,
                             source=source,
                         )
+                        source_metrics["articles_inserted"] += int(inserted)
 
                     if inserted:
                         new_count += 1
@@ -251,13 +266,13 @@ class RSSCollector:
                 if new_count > 0:
                     logger.info(f"[+{new_count}] T{source.tier} {source.name}")
 
-                return {"new_count": new_count}
+                return {"new_count": new_count, **source_metrics}
 
             except Exception as e:
                 self.breaker.record_failure(source.name)
                 err = str(e).strip() or e.__class__.__name__
                 logger.error(f"[ERR] T{source.tier} {source.name}: {err}")
-                return {"error": err}
+                return {"error": err, **source_metrics}
             finally:
                 if managed_session:
                     await active_session.close()
@@ -310,20 +325,23 @@ class RSSCollector:
         content: str,
         source: Source,
         published: str | None,
-    ) -> bool:
+    ) -> dict[str, Any]:
         article_normalizer = self.article_normalizer
         article_repository = self.article_repository
         article_feature_extractor = self.article_feature_extractor
         semantic_deduper = self.semantic_deduper
         event_candidate_extractor = self.event_candidate_extractor
         event_enrichment = self.event_enrichment
+        metrics = self._empty_source_metrics()
         if not self._event_intelligence_enabled():
-            return await self._save_legacy_news(
+            inserted = await self._save_legacy_news(
                 link=link,
                 title=title,
                 content=content,
                 source=source,
             )
+            metrics["articles_inserted"] += int(inserted)
+            return {"inserted": inserted, **metrics}
 
         normalizer = cast(ArticleNormalizerLike, article_normalizer)
         repository = cast(ArticleRepositoryLike, article_repository)
@@ -350,34 +368,44 @@ class RSSCollector:
             article = normalizer.normalize(raw_article)
         except Exception as exc:
             logger.error(f"[EIL] Failed to normalize article {link}: {exc}")
-            return await self._save_legacy_news(
+            inserted = await self._save_legacy_news(
                 link=link,
                 title=title,
                 content=content,
                 source=source,
             )
+            metrics["articles_inserted"] += int(inserted)
+            return {"inserted": inserted, **metrics}
 
         created = False
+        duplicate_refresh = False
         try:
             await repository.create_article(article.to_article_payload())
             created = True
+            metrics["articles_inserted"] += 1
         except Exception as exc:
             existing = await repository.get_article(article.article_id)
             if existing is None:
                 logger.error(f"[EIL] Failed to persist article {link}: {exc}")
-                return await self._mirror_legacy_news(
+                inserted = await self._mirror_legacy_news(
                     link=link,
                     title=title,
                     content=content,
                     source=source,
                 )
+                metrics["articles_inserted"] += int(inserted)
+                metrics["legacy_mirrored"] += int(inserted)
+                return {"inserted": inserted, **metrics}
             logger.warning(
                 f"[EIL] Article already exists for {link}; refreshing features: {exc}"
             )
+            duplicate_refresh = True
+            metrics["duplicate_refreshes"] += 1
 
         if deduper is not None:
             try:
-                await deduper.link_cheap_duplicates(article)
+                cheap_links = await deduper.link_cheap_duplicates(article)
+                metrics["cheap_dedup_links"] += len(cheap_links)
             except Exception as exc:
                 logger.error(
                     f"[EIL] Failed to create cheap dedup links for {link}: {exc}"
@@ -388,13 +416,15 @@ class RSSCollector:
             extracted_features = await feature_extractor.extract_and_persist(article)
         except Exception as exc:
             logger.error(f"[EIL] Failed to extract features for article {link}: {exc}")
+            metrics["feature_failures"] += 1
 
         if deduper is not None and extracted_features is not None:
             try:
-                await deduper.link_semantic_duplicates(
+                semantic_links = await deduper.link_semantic_duplicates(
                     article,
                     embedding=extracted_features.get("embedding"),
                 )
+                metrics["semantic_dedup_links"] += len(semantic_links)
             except Exception as exc:
                 logger.error(
                     f"[EIL] Failed to create semantic dedup links for article {link}: {exc}"
@@ -411,17 +441,23 @@ class RSSCollector:
                     article,
                     extracted_features=extracted_features,
                 )
+                event_payload = (
+                    event_result.get("event")
+                    if isinstance(event_result, Mapping)
+                    else None
+                )
+                event_id = (
+                    self._text(event_payload.get("event_id"))
+                    if isinstance(event_payload, Mapping)
+                    else ""
+                )
+                if event_id:
+                    metrics["events_touched"] += 1
+                    if bool(event_result.get("created")):
+                        metrics["events_created"] += 1
+                    else:
+                        metrics["events_updated"] += 1
                 if event_enricher is not None:
-                    event_payload = (
-                        event_result.get("event")
-                        if isinstance(event_result, Mapping)
-                        else None
-                    )
-                    event_id = (
-                        self._text(event_payload.get("event_id"))
-                        if isinstance(event_payload, Mapping)
-                        else ""
-                    )
                     if event_id:
                         try:
                             await event_enricher.enrich_event(
@@ -429,6 +465,7 @@ class RSSCollector:
                                 event=cast(Mapping[str, Any], event_payload),
                             )
                         except Exception as exc:
+                            metrics["event_enrichment_failures"] += 1
                             logger.error(
                                 f"[EIL] Failed to enrich event {event_id} for {link}: {exc}"
                             )
@@ -441,7 +478,44 @@ class RSSCollector:
             content=content,
             source=source,
         )
-        return created or legacy_inserted
+        metrics["legacy_mirrored"] += int(legacy_inserted)
+        return {
+            "inserted": created or duplicate_refresh or legacy_inserted,
+            **metrics,
+        }
+
+    @staticmethod
+    def _empty_source_metrics() -> dict[str, int]:
+        return {
+            "articles_seen": 0,
+            "articles_inserted": 0,
+            "legacy_mirrored": 0,
+            "duplicate_refreshes": 0,
+            "feature_failures": 0,
+            "cheap_dedup_links": 0,
+            "semantic_dedup_links": 0,
+            "events_created": 0,
+            "events_updated": 0,
+            "event_enrichment_failures": 0,
+            "events_touched": 0,
+        }
+
+    def _merge_ingestion_metrics(
+        self,
+        target: Dict[str, Any],
+        payload: Mapping[str, Any],
+    ) -> None:
+        for key in self._empty_source_metrics():
+            target[key] = self._safe_int(target.get(key)) + self._safe_int(
+                payload.get(key)
+            )
+
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _text(value: Any) -> str:
