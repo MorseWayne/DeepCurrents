@@ -98,10 +98,12 @@ class DeepCurrentsEngine:
                 cast("VectorStoreLike", vector_store),
             )
             event_repository = EventRepository(postgres_pool)
+            cache_store = stores.get("cache")
             event_enrichment = EventEnrichmentService(
                 event_repository,
                 article_repository,
                 ai_service=self.ai,
+                cache=cache_store,
             )
             event_builder = EventBuilder(
                 event_repository,
@@ -160,10 +162,12 @@ class DeepCurrentsEngine:
             event_repository = EventRepository(postgres_pool)
             brief_repository = BriefRepository(postgres_pool)
             report_repository = ReportRepository(postgres_pool)
+            cache_store = stores.get("cache")
             event_enrichment = EventEnrichmentService(
                 event_repository,
                 article_repository,
                 ai_service=self.ai,
+                cache=cache_store,
             )
             event_query_service = EventQueryService(
                 event_repository,

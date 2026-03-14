@@ -36,6 +36,14 @@ class ArticleRepositoryLike(Protocol):
 
     async def list_dedup_links(self, article_id: str) -> list[dict[str, Any]]: ...
 
+    async def get_articles_batch(
+        self, article_ids: Sequence[str]
+    ) -> dict[str, dict[str, Any]]: ...
+
+    async def list_dedup_links_batch(
+        self, article_ids: Sequence[str]
+    ) -> dict[str, list[dict[str, Any]]]: ...
+
 
 class EventEnrichmentLike(Protocol):
     async def get_event_enrichment(
@@ -128,17 +136,23 @@ class EventQueryService:
             event=event,
         )
 
+        article_ids = [self._text(m.get("article_id")) for m in members if self._text(m.get("article_id"))]
+        articles_map = await self.article_repository.get_articles_batch(article_ids)
+        dedup_map = await self.article_repository.list_dedup_links_batch(article_ids)
+
         serialized_members: list[dict[str, Any]] = []
         for member in members:
             article_id = self._text(member.get("article_id"))
-            article = await self.article_repository.get_article(article_id) or {}
-            dedup_links = await self.article_repository.list_dedup_links(article_id)
+            article = articles_map.get(article_id) or {}
+            dedup_links = dedup_map.get(article_id, [])
             serialized_members.append(
                 {
                     "article_id": article_id,
                     "source_id": self._source_id(article),
                     "title": self._text(article.get("title")),
                     "published_at": article.get("published_at"),
+                    "tier": self._safe_int(article.get("tier")),
+                    "source_type": self._text(article.get("source_type")),
                     "role": self._text(member.get("role")),
                     "is_primary": bool(member.get("is_primary")),
                     "dedup_relations_count": len(dedup_links),

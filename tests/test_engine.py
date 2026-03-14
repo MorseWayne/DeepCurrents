@@ -298,7 +298,7 @@ async def test_engine_configures_report_stack_from_runtime_stores(engine):
             self.pool = pool
 
     class EventEnrichmentService:
-        def __init__(self, event_repository, article_repository):
+        def __init__(self, event_repository, article_repository, **kwargs):
             self.event_repository = event_repository
             self.article_repository = article_repository
 
@@ -309,19 +309,19 @@ async def test_engine_configures_report_stack_from_runtime_stores(engine):
             self.event_enrichment = event_enrichment
 
     class EventRanker:
-        def __init__(self, event_repository, article_repository, event_query_service):
+        def __init__(self, event_repository, article_repository, event_query_service, **kwargs):
             self.event_repository = event_repository
             self.article_repository = article_repository
             self.event_query_service = event_query_service
 
     class EvidenceSelector:
-        def __init__(self, article_repository, event_query_service, event_ranker):
+        def __init__(self, article_repository, event_query_service, event_ranker, **kwargs):
             self.article_repository = article_repository
             self.event_query_service = event_query_service
             self.event_ranker = event_ranker
 
     class EventSummarizer:
-        def __init__(self, brief_repository, event_query_service, evidence_selector):
+        def __init__(self, brief_repository, event_query_service, evidence_selector, **kwargs):
             self.brief_repository = brief_repository
             self.event_query_service = event_query_service
             self.evidence_selector = evidence_selector

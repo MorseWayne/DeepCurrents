@@ -50,12 +50,29 @@ class FakeArticleRepository:
         article = self.articles.get(article_id)
         return dict(article) if article else None
 
+    async def get_articles_batch(
+        self, article_ids: Sequence[str]
+    ) -> dict[str, dict[str, Any]]:
+        return {
+            aid: dict(a)
+            for aid in article_ids
+            if (a := self.articles.get(aid)) is not None
+        }
+
     async def get_article_features(self, article_id: str) -> dict[str, Any] | None:
         features = self.features.get(article_id)
         return dict(features) if features else None
 
     async def list_dedup_links(self, article_id: str) -> list[dict[str, Any]]:
         return [dict(item) for item in self.dedup_links.get(article_id, [])]
+
+    async def list_dedup_links_batch(
+        self, article_ids: Sequence[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        return {
+            aid: [dict(item) for item in self.dedup_links.get(aid, [])]
+            for aid in article_ids
+        }
 
 
 class FakeEventEnrichmentService:

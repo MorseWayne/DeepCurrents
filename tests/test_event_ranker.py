@@ -147,8 +147,8 @@ async def test_event_ranker_scores_event_and_persists_all_dimensions():
         market_channels=[{"name": "energy"}, {"name": "shipping"}],
         assets=[{"name": "brent"}],
         members=[
-            {"article_id": "art_1"},
-            {"article_id": "art_2"},
+            {"article_id": "art_1", "tier": 1, "source_type": "wire"},
+            {"article_id": "art_2", "tier": 2, "source_type": "news"},
         ],
         transitions=[
             {
@@ -216,7 +216,10 @@ async def test_event_ranker_ranks_high_impact_event_above_low_value_single_sourc
         contradicting_sources=[],
         market_channels=[{"name": "rates"}, {"name": "fx"}],
         assets=[],
-        members=[{"article_id": "art_hi_1"}, {"article_id": "art_hi_2"}],
+        members=[
+            {"article_id": "art_hi_1", "tier": 1, "source_type": "wire"},
+            {"article_id": "art_hi_2", "tier": 2, "source_type": "wire"},
+        ],
         transitions=[
             {
                 "from_state": "active",
@@ -238,7 +241,7 @@ async def test_event_ranker_ranks_high_impact_event_above_low_value_single_sourc
         contradicting_sources=[],
         market_channels=[],
         assets=[],
-        members=[{"article_id": "art_lo_1"}],
+        members=[{"article_id": "art_lo_1", "tier": 4, "source_type": "blog"}],
         transitions=[
             {
                 "from_state": "new",
@@ -305,8 +308,8 @@ async def test_event_ranker_applies_profiles_with_reproducible_different_orderin
         market_channels=[{"name": "rates"}, {"name": "fx"}, {"name": "credit"}],
         assets=[{"name": "usd"}, {"name": "us10y"}],
         members=[
-            {"article_id": "art_macro_1"},
-            {"article_id": "art_macro_2"},
+            {"article_id": "art_macro_1", "tier": 1, "source_type": "wire"},
+            {"article_id": "art_macro_2", "tier": 1, "source_type": "official"},
         ],
         transitions=[
             {
@@ -333,8 +336,8 @@ async def test_event_ranker_applies_profiles_with_reproducible_different_orderin
         market_channels=[{"name": "energy"}],
         assets=[],
         members=[
-            {"article_id": "art_risk_1"},
-            {"article_id": "art_risk_2"},
+            {"article_id": "art_risk_1", "tier": 3, "source_type": "news"},
+            {"article_id": "art_risk_2", "tier": 3, "source_type": "news"},
         ],
         transitions=[
             {
@@ -393,7 +396,7 @@ async def test_event_ranker_penalizes_uncertain_single_source_conflicting_event(
         contradicting_sources=[{"source_id": "unknown"}],
         market_channels=[{"name": "rates"}],
         assets=[],
-        members=[{"article_id": "art_1"}],
+        members=[{"article_id": "art_1", "tier": 3, "source_type": "news"}],
         transitions=[
             {
                 "from_state": "active",

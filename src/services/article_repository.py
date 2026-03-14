@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .repository_support import (
     ensure_pool,
@@ -77,6 +77,25 @@ class ArticleRepository:
             article_id,
         )
         return normalize_row(row, json_field_names=self._ARTICLE_JSON_FIELDS)
+
+    async def get_articles_batch(
+        self, article_ids: Sequence[str]
+    ) -> dict[str, dict[str, Any]]:
+        """批量获取文章，返回 article_id -> article 的映射。空 ID 或不存在的不在结果中。"""
+        if not article_ids:
+            return {}
+        unique_ids = list(dict.fromkeys(aid for aid in article_ids if aid))
+        if not unique_ids:
+            return {}
+        pool = ensure_pool(self._pool)
+        rows = await pool.fetch(
+            "SELECT * FROM articles WHERE article_id = ANY($1::text[])",
+            unique_ids,
+        )
+        normalized = normalize_rows(
+            rows, json_field_names=self._ARTICLE_JSON_FIELDS
+        )
+        return {row["article_id"]: row for row in normalized if row.get("article_id")}
 
     async def get_article_by_canonical_url(
         self, canonical_url: str
@@ -222,3 +241,33 @@ class ArticleRepository:
             article_id,
         )
         return normalize_rows(rows, json_field_names=self._DEDUP_JSON_FIELDS)
+
+    async def list_dedup_links_batch(
+        self, article_ids: Sequence[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """批量获取文章的 dedup 链接，返回 article_id -> [links] 的映射。"""
+        if not article_ids:
+            return {}
+        unique_ids = list(dict.fromkeys(aid for aid in article_ids if aid))
+        if not unique_ids:
+            return {}
+        pool = ensure_pool(self._pool)
+        rows = await pool.fetch(
+            """
+            SELECT *
+            FROM article_dedup_links
+            WHERE left_article_id = ANY($1::text[]) OR right_article_id = ANY($1::text[])
+            ORDER BY created_at DESC
+            """,
+            unique_ids,
+        )
+        normalized = normalize_rows(rows, json_field_names=self._DEDUP_JSON_FIELDS)
+        result: dict[str, list[dict[str, Any]]] = {aid: [] for aid in unique_ids}
+        for link in normalized:
+            left = link.get("left_article_id") or ""
+            right = link.get("right_article_id") or ""
+            if left in result:
+                result[left].append(link)
+            if right in result and right != left:
+                result[right].append(link)
+        return result

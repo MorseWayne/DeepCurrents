@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -68,6 +69,9 @@ class EventQueryLike(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
+RANKING_CONCURRENCY = 30
+
+
 class EventRanker:
     def __init__(
         self,
@@ -76,11 +80,13 @@ class EventRanker:
         event_query_service: EventQueryLike,
         *,
         reference_now: datetime | None = None,
+        ranking_concurrency: int = RANKING_CONCURRENCY,
     ):
         self.event_repository = event_repository
         self.article_repository = article_repository
         self.event_query_service = event_query_service
         self.reference_now = reference_now
+        self.ranking_concurrency = ranking_concurrency
         self.last_ranking_metrics: dict[str, Any] = {}
 
     async def score_event(
@@ -134,25 +140,35 @@ class EventRanker:
             theme=theme,
             limit=candidate_pool_size,
         )
-        ranked: list[dict[str, Any]] = []
-        for item in event_items:
+        semaphore = asyncio.Semaphore(self.ranking_concurrency)
+
+        async def score_one(item: dict[str, Any]) -> dict[str, Any] | None:
             event_id = self._text(item.get("event_id"))
             if not event_id:
-                continue
-            timeline = await self.event_query_service.get_event_timeline(event_id)
-            score_payload = await self._build_score_payload(
-                timeline,
-                profile=scoring_profile,
-            )
-            scored = await self.event_repository.upsert_event_score(score_payload)
-            ranked.append(
-                {
+                return None
+            async with semaphore:
+                timeline = await self.event_query_service.get_event_timeline(
+                    event_id
+                )
+                score_payload = await self._build_score_payload(
+                    timeline,
+                    profile=scoring_profile,
+                )
+                scored = await self.event_repository.upsert_event_score(
+                    score_payload
+                )
+                return {
                     "event_id": event_id,
                     "total_score": self._safe_float(scored.get("total_score")),
                     "score": dict(scored),
                     "event": dict(item),
                 }
-            )
+
+        results = await asyncio.gather(
+            *[score_one(item) for item in event_items],
+            return_exceptions=False,
+        )
+        ranked = [r for r in results if r is not None]
         ranked.sort(
             key=lambda item: (-item["total_score"], self._text(item.get("event_id")))
         )
@@ -220,7 +236,7 @@ class EventRanker:
         market_impact_score = self._market_impact_score(event, enrichment)
         novelty_score = self._novelty_score(event, enrichment)
         corroboration_score = self._corroboration_score(event, enrichment)
-        source_quality_score = await self._source_quality_score(members)
+        source_quality_score = self._source_quality_score(members)
         velocity_score = self._velocity_score(event, members, transitions)
         uncertainty_score = self._uncertainty_score(event, enrichment)
         return {
@@ -493,21 +509,18 @@ class EventRanker:
             score = max(0.0, score - min(0.15 * contradicting_sources, 0.45))
         return round(min(score, 1.0), 3)
 
-    async def _source_quality_score(
+    def _source_quality_score(
         self,
         members: Sequence[Mapping[str, Any]],
     ) -> float:
+        """使用 timeline members 中的 tier/source_type，无需额外查询 article。"""
         if not members:
             return 0.0
 
         scores: list[float] = []
         for member in members:
-            article_id = self._text(member.get("article_id"))
-            if not article_id:
-                continue
-            article = await self.article_repository.get_article(article_id) or {}
-            tier = self._safe_int(article.get("tier"))
-            source_type = self._text(article.get("source_type")).casefold()
+            tier = self._safe_int(member.get("tier"))
+            source_type = self._text(member.get("source_type")).casefold()
             tier_score = {1: 1.0, 2: 0.82, 3: 0.64, 4: 0.45}.get(tier, 0.45)
             source_type_bonus = {
                 "wire": 0.08,

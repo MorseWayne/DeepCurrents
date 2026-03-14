@@ -4,6 +4,10 @@ from collections import Counter, defaultdict
 import json
 from typing import Any, Mapping, Protocol, Sequence
 
+from ..utils.logger import get_logger
+
+logger = get_logger("event-enrichment")
+
 REGION_METADATA_KEYS = ("regions", "countries", "locations", "markets")
 ASSET_METADATA_KEYS = ("assets", "symbols", "tickers")
 ENTITY_METADATA_KEYS = (
@@ -235,13 +239,25 @@ class AIServiceLike(Protocol):
     ) -> str: ...
 
 
+class CacheLike(Protocol):
+    async def get(self, key: str) -> Any | None: ...
+
+    async def set(
+        self, key: str, value: Any, *, ttl_seconds: int = 900
+    ) -> bool: ...
+
+
 class EventEnrichmentService:
+    ENRICHMENT_CACHE_PREFIX = "enrichment:"
+    ENRICHMENT_CACHE_TTL = 900
+
     def __init__(
         self,
         event_repository: EventRepositoryLike,
         article_repository: ArticleRepositoryLike,
         ai_service: AIServiceLike | None = None,
         *,
+        cache: CacheLike | None = None,
         max_entities: int = 12,
         max_regions: int = 8,
         max_assets: int = 8,
@@ -250,6 +266,7 @@ class EventEnrichmentService:
         self.event_repository = event_repository
         self.article_repository = article_repository
         self.ai_service = ai_service
+        self._cache = cache
         self.max_entities = max_entities
         self.max_regions = max_regions
         self.max_assets = max_assets
@@ -356,6 +373,12 @@ class EventEnrichmentService:
         *,
         event: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        cache_key = f"{self.ENRICHMENT_CACHE_PREFIX}{event_id}"
+        if self._cache:
+            cached = await self._cache.get(cache_key)
+            if isinstance(cached, Mapping):
+                return dict(cached)
+
         event_row = dict(event or await self.event_repository.get_event(event_id) or {})
         if not event_row:
             raise ValueError(f"event not found: {event_id}")
@@ -363,9 +386,23 @@ class EventEnrichmentService:
         if isinstance(metadata, Mapping):
             enrichment = metadata.get("enrichment")
             if isinstance(enrichment, Mapping):
-                return dict(enrichment)
+                result = dict(enrichment)
+                if self._cache:
+                    await self._cache.set(
+                        cache_key,
+                        result,
+                        ttl_seconds=self.ENRICHMENT_CACHE_TTL,
+                    )
+                return result
         result = await self.enrich_event(event_id, event=event_row)
-        return dict(result["enrichment"])
+        enrichment = dict(result["enrichment"])
+        if self._cache:
+            await self._cache.set(
+                cache_key,
+                enrichment,
+                ttl_seconds=self.ENRICHMENT_CACHE_TTL,
+            )
+        return enrichment
 
     async def _aggregate_members(
         self,
