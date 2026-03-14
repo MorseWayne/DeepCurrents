@@ -1,9 +1,9 @@
 # DeepCurrents (深流) 技术设计文档
 
 **版本**: v2.2 (Python)
-**状态**: Event-centric 主链路已落地
+**状态**: Event-centric 主链路已落地 (Active)
 **定位**: AI 驱动的全球情报聚合与宏观策略研报引擎
-**配套文档**: [index.md](./index.md) | [event-intelligence.md](./event-intelligence.md) | [iteration-plan.md](./iteration-plan.md) | [archive/README.md](./archive/README.md)
+**配套文档**: [index.md](./index.md) | [战略演进白皮书](./analysis/architecture-evaluation-2026.md) | [archive/README.md](./archive/README.md)
 
 ---
 
@@ -11,7 +11,13 @@
 
 DeepCurrents 从多源 RSS / RSSHub 信息流中抓取文章，执行 article-first ingestion、特征抽取、cheap/semantic dedup、事件归并、事件排序与 evidence 选择，再通过多智能体 LLM 流程生成每日结构化研报，并投递到飞书与 Telegram。
 
-当前正式实现已经不再使用旧 `raw_news -> classifier -> clustering -> generate_daily_report()` 文章级主链路。
+当前正式实现已经不再使用旧 `raw_news -> classifier -> clustering -> generate_daily_report()` 文章级主链路。**Event Intelligence 已经是唯一正式的采集与研报主链路。**
+
+### 核心演进现状 (2026-03-14)
+- **深度事件摘要 (`llm_v1`)**: 事件总结器不再依赖硬编码模板，支持基于 LLM 的跨文章逻辑整合，能够识别因果传导路径与资产定价影响。
+- **增强型金融富化**: 事件富化服务接入 AI 语义识别，支持自动映射具体资产标的 (Tickers)、提取受影响的金融频道 (Market Channels) 并识别地缘/宏观因子。
+- **动态配额与上下文预算**: 重构了 `ContextQuotaPolicy`，放宽了策略的事件容量上限，并允许按主题重要性动态分配 Token 预算。
+- **宏观决策因子化**: 将 VIX、10Y-2Y 息差等行情指标作为一级决策因子注入 Agent 系统。
 
 ---
 
@@ -215,14 +221,14 @@ docker compose logs -f deep-currents
 
 ---
 
-## 6. 已知限制
+## 6. 已知限制与运维注意事项
 
-1. Event Intelligence runtime 未配置时，系统不会回退旧文章级链路。
-2. 评分窗口仍为演示参数:
-   - 当前默认“预测后 10 秒即可评分”，生产环境建议改为 12h/24h 或按资产波动率配置。
-3. 资产类别解析仍存在边界:
-   - 自动搜索 symbol 受外部行情搜索结果质量影响，建议持续扩充 `asset_symbols.json`。
+1. **运行时依赖**: Event Intelligence 强依赖 PostgreSQL、Qdrant、Redis。未配置或启动失败时，系统会保持 `fail-closed`，不会回退到旧文章级链路。
+2. **评分窗口**: 当前默认“预测后 10 秒即可评分”，生产环境建议改为 12h/24h 或按资产波动率配置。
+3. **资产映射边界**: 自动搜索 symbol 受外部行情搜索结果质量影响，建议持续扩充 `asset_symbols.json`。
+4. **代理配置**: 宿主机运行时使用 `HTTPS_PROXY`；compose 容器使用 `DOCKER_HTTPS_PROXY`。采集器会自动让本地/私有网段目标绕过代理。
+5. **部署检查**: 必须确保 `EVENT_INTELLIGENCE_ENABLED=true` 且所有连接字符串正确。embedding model 必须与 provider 兼容。
 
 ---
 
-*Last aligned with codebase on 2026-03-13.*
+*Last aligned with codebase on 2026-03-14.*

@@ -1,24 +1,20 @@
-# DeepCurrents 文档索引
+# DeepCurrents (深流) 文档索引
 
-## 当前文档
-
+## 🎯 核心架构与战略
 | 文件 | 用途 |
 | --- | --- |
-| [technical-design.md](./technical-design.md) | 当前系统架构、运行模式和依赖边界。 |
-| [event-intelligence.md](./event-intelligence.md) | Event Intelligence 当前状态、已完成范围和明确未完成项。 |
-| [iteration-plan.md](./iteration-plan.md) | 下一轮迭代优化计划和优先级。 |
-| [archive/README.md](./archive/README.md) | 历史设计稿、roadmap、backlog 的归档入口。 |
+| [architecture-evaluation-2026.md](./analysis/architecture-evaluation-2026.md) | **战略演进白皮书 (The North Star)**：系统的长远演进方向、Agent 架构设计与确定性原则。 |
+| [technical-design.md](./technical-design.md) | **技术设计文档**：当前系统的核心实现架构、数据流转、服务模块与部署指南。 |
+| [tech-stack.md](./tech-stack.md) | **技术栈基准**：项目采用的编程语言、存储基础设施与核心库。 |
 
-建议阅读顺序:
+## 📚 归档与历史
+| 文件 | 用途 |
+| --- | --- |
+| [archive/README.md](./archive/README.md) | 历史设计稿、旧版 Roadmap 和已完成阶段的归档。 |
 
-1. [README.md](../README.md)
-2. [index.md](./index.md)
-3. [technical-design.md](./technical-design.md)
-4. [event-intelligence.md](./event-intelligence.md)
-5. [iteration-plan.md](./iteration-plan.md)
+---
 
-## 收束原则
-
-- `docs/` 只保留当前有效文档和下一轮计划。
-- 历史 spec、roadmap、backlog 统一放到 `docs/archive/`。
-- 归档文档保留历史措辞，可能包含旧文件名、旧状态或当时的实现假设。
+### 📖 建议阅读顺序
+1. **[README.md](../README.md)**：项目快速启动与全局概览。
+2. **[战略演进白皮书](./analysis/architecture-evaluation-2026.md)**：理解本系统的灵魂，包括“混动智能”与“事实驱动”的逻辑。
+3. **[技术设计文档](./technical-design.md)**：深入了解代码实现与物理架构。
