@@ -85,7 +85,9 @@ class EventSummarizer:
         self.evidence_selector = evidence_selector
         self.ai_service = ai_service
         self.version = version
-        self.model = "rule_template_v1" if ai_service is None and model == "llm_v1" else model
+        self.model = (
+            "rule_template_v1" if ai_service is None and model == "llm_v1" else model
+        )
         self.last_brief_metrics: dict[str, Any] = {}
 
     async def summarize_event(
@@ -273,14 +275,15 @@ class EventSummarizer:
                     use_json=True,
                 )
                 parsed = json.loads(raw_json)
-                
+
                 # 融合基础结构与 LLM 分析
                 return {
                     "eventId": event_id,
                     "canonicalTitle": parsed.get("canonicalTitle")
                     or self._text(event.get("canonical_title")),
                     "stateChange": parsed.get("stateChange") or state_change,
-                    "coreFacts": parsed.get("coreFacts") or self._core_facts(
+                    "coreFacts": parsed.get("coreFacts")
+                    or self._core_facts(
                         event=event,
                         event_type=event_type,
                         state_change=state_change,
@@ -320,7 +323,9 @@ class EventSummarizer:
                     "totalScore": total_score,
                 }
             except Exception as e:
-                logger.warning(f"LLM event summarization failed, falling back to rule-template: {e}")
+                logger.warning(
+                    f"LLM event summarization failed, falling back to rule-template: {e}"
+                )
 
         # Fallback 到旧的 rule_template_v1 逻辑
         return {
@@ -379,36 +384,51 @@ class EventSummarizer:
         contradicting_evidence: Sequence[Mapping[str, Any]],
     ) -> list[str]:
         facts: list[str] = []
-        facts.append(
-            f"{self._event_type_label(event_type)} event is {state_change} with {source_count} sources and {article_count} articles."
-        )
+        type_label = self._event_type_label(event_type)
+        canonical = self._text(event.get("canonical_title"))
+
+        if canonical:
+            facts.append(
+                f"{type_label}: {canonical} ({state_change}, "
+                f"{source_count} sources / {article_count} articles)."
+            )
+        else:
+            facts.append(
+                f"{type_label} event is {state_change} with "
+                f"{source_count} sources and {article_count} articles."
+            )
+
         if regions or channels:
             scope_parts: list[str] = []
             if regions:
                 scope_parts.append(f"regions: {', '.join(regions)}")
             if channels:
-                scope_parts.append(f"market channels: {', '.join(channels)}")
-            facts.append(f"Primary impact scope covers {'; '.join(scope_parts)}.")
+                scope_parts.append(f"channels: {', '.join(channels)}")
+            facts.append(f"Impact scope: {'; '.join(scope_parts)}.")
 
-        for item in supporting_evidence[:2]:
+        for item in supporting_evidence[:3]:
             title = self._text(item.get("title"))
+            source_id = self._text(item.get("source_id"))
             if title:
-                facts.append(title)
+                attribution = f" [{source_id}]" if source_id else ""
+                facts.append(f"{title}{attribution}")
 
         if contradicting_evidence:
             counter_title = self._text(contradicting_evidence[0].get("title"))
+            counter_source = self._text(contradicting_evidence[0].get("source_id"))
             if counter_title:
-                facts.append(f"Counterpoint: {counter_title}")
+                attr = f" [{counter_source}]" if counter_source else ""
+                facts.append(f"Counterpoint: {counter_title}{attr}")
 
         deduped: list[str] = []
-        seen = set()
+        seen: set[str] = set()
         for fact in facts:
             normalized = fact.casefold()
             if not fact or normalized in seen:
                 continue
             seen.add(normalized)
             deduped.append(fact)
-        return deduped[:4]
+        return deduped[:5]
 
     def _why_it_matters(
         self,
@@ -421,17 +441,30 @@ class EventSummarizer:
         contradictions: Sequence[Mapping[str, Any]],
     ) -> str:
         channels_text = ", ".join(channels[:3]) if channels else "cross-asset sentiment"
-        driver_text = ", ".join(top_drivers[:2]) if top_drivers else "market impact"
-        contradiction_text = (
-            " while contradictory reporting remains active"
-            if contradictions
-            else ""
+        driver_text = ", ".join(top_drivers[:3]) if top_drivers else "market impact"
+        type_label = self._event_type_label(event_type).lower()
+
+        conf_label = (
+            "high"
+            if confidence >= 0.75
+            else "moderate"
+            if confidence >= 0.45
+            else "low"
         )
-        return (
-            f"This {self._event_type_label(event_type).lower()} matters for {channels_text} "
-            f"because it is {state_change} and currently ranks on {driver_text}, "
-            f"with confidence {confidence:.2f}{contradiction_text}."
-        )
+
+        parts = [
+            f"This {type_label} is {state_change} and affects {channels_text}.",
+            f"Key drivers: {driver_text} (confidence: {conf_label}, {confidence:.0%}).",
+        ]
+
+        if contradictions:
+            n = len(contradictions)
+            parts.append(
+                f"Note: {n} contradicting source{'s' if n > 1 else ''} "
+                f"{'are' if n > 1 else 'is'} active — thesis may face challenge."
+            )
+
+        return " ".join(parts)
 
     def _build_summary(self, brief_json: Mapping[str, Any]) -> str:
         title = self._text(brief_json.get("canonicalTitle"))
@@ -456,21 +489,18 @@ class EventSummarizer:
             if isinstance(brief, Mapping)
         ]
         confidences = [
-            self._safe_float(item.get("confidence"))
-            for item in brief_jsons
-            if item
+            self._safe_float(item.get("confidence")) for item in brief_jsons if item
         ]
         total_scores = [
-            self._safe_float(item.get("totalScore"))
-            for item in brief_jsons
-            if item
+            self._safe_float(item.get("totalScore")) for item in brief_jsons if item
         ]
         contradiction_briefs = sum(
-            1 for item in brief_jsons if self._sequence_of_mappings(item.get("contradictions"))
+            1
+            for item in brief_jsons
+            if self._sequence_of_mappings(item.get("contradictions"))
         )
         evidence_counts = [
-            len(self._text_list(item.get("evidenceRefs")))
-            for item in brief_jsons
+            len(self._text_list(item.get("evidenceRefs"))) for item in brief_jsons
         ]
         return {
             "profile": profile,
@@ -512,7 +542,9 @@ class EventSummarizer:
         corroboration = self._safe_float(event_score.get("corroboration_score"))
         source_quality = self._safe_float(event_score.get("source_quality_score"))
         uncertainty = self._safe_float(event_score.get("uncertainty_score"))
-        confidence = corroboration * 0.45 + source_quality * 0.35 + (1.0 - uncertainty) * 0.2
+        confidence = (
+            corroboration * 0.45 + source_quality * 0.35 + (1.0 - uncertainty) * 0.2
+        )
         return round(min(max(confidence, 0.0), 1.0), 3)
 
     def _top_driver_names(self, event_score: Mapping[str, Any]) -> list[str]:

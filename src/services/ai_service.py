@@ -3,9 +3,10 @@ import json
 import re
 import time
 from datetime import date, datetime, timezone
-from typing import Dict, Any, Optional, Literal, Tuple, List
+from typing import Dict, Any, Optional, Literal, Tuple, List, Type, TypeVar
 import httpx
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 from ..config.settings import CONFIG
 from ..config.asset_symbols import resolve_asset_symbol, get_default_market_symbols
 from .prediction_repository import PredictionRepository
@@ -21,6 +22,43 @@ from ..utils.market_data import get_market_price, search_market_symbol
 from ..utils.logger import get_logger
 
 logger = get_logger("ai-service")
+
+T = TypeVar("T", bound=BaseModel)
+
+# ── instructor lazy loading ──
+
+_instructor: Any = None
+_langfuse: Any = None
+
+
+def _ensure_langfuse() -> Any:
+    global _langfuse
+    if _langfuse is None:
+        try:
+            from langfuse import Langfuse as _LF
+
+            _langfuse = _LF()
+        except ImportError:
+            _langfuse = False
+            logger.debug("langfuse not installed; observability tracing disabled")
+        except Exception as exc:
+            _langfuse = False
+            logger.debug(f"langfuse init failed (missing env?): {exc}")
+    return _langfuse if _langfuse is not False else None
+
+
+def _ensure_instructor() -> Any:
+    global _instructor
+    if _instructor is None:
+        try:
+            import instructor as _mod
+
+            _instructor = _mod
+        except ImportError:
+            logger.debug("instructor 未安装，结构化输出回退到 JSON 模式")
+            _instructor = False  # sentinel: attempted but unavailable
+    return _instructor if _instructor is not False else None
+
 
 # ── Token 预算管理 ──
 
@@ -62,29 +100,34 @@ DATE_PLACEHOLDER_TOKENS = {
     "date",
 }
 
+
 def estimate_tokens(text: str) -> int:
     return int(len(text) / 3.5)
 
+
 def truncate_to_token_budget(text: str, max_tokens: int) -> str:
     max_chars = int(max_tokens * 3.5)
-    if len(text) <= max_chars: return text
+    if len(text) <= max_chars:
+        return text
     truncated = text[:max_chars]
-    last_newline = truncated.rfind('\n')
+    last_newline = truncated.rfind("\n")
     if last_newline > max_chars * 0.8:
         return truncated[:last_newline]
     return truncated
 
+
 # ── JSON 提取 (容错) ──
 
+
 def extract_json(raw: str) -> str:
-    trimmed = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', raw).strip()
+    trimmed = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", raw).strip()
     try:
         json.loads(trimmed)
         return trimmed
     except:
         pass
-    
-    fence_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)```', trimmed)
+
+    fence_match = re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", trimmed)
     if fence_match:
         candidate = fence_match.group(1).strip()
         try:
@@ -92,11 +135,11 @@ def extract_json(raw: str) -> str:
             return candidate
         except:
             pass
-            
-    first = trimmed.find('{')
-    last = trimmed.rfind('}')
+
+    first = trimmed.find("{")
+    last = trimmed.rfind("}")
     if first != -1 and last > first:
-        candidate = trimmed[first:last+1]
+        candidate = trimmed[first : last + 1]
         try:
             json.loads(candidate)
             return candidate
@@ -104,12 +147,14 @@ def extract_json(raw: str) -> str:
             pass
     return trimmed
 
+
 class AIService:
-    def __init__(
-        self, prediction_repository: Optional[PredictionRepository] = None
-    ):
+    def __init__(self, prediction_repository: Optional[PredictionRepository] = None):
         self.prediction_repository = prediction_repository or PredictionRepository()
-        self.client = AsyncOpenAI(api_key=CONFIG.ai_api_key, base_url=CONFIG.ai_api_url.replace('/chat/completions', ''))
+        self.client = AsyncOpenAI(
+            api_key=CONFIG.ai_api_key,
+            base_url=CONFIG.ai_api_url.replace("/chat/completions", ""),
+        )
         self._asset_symbol_cache: Dict[str, Optional[str]] = {}
         self._window_cache: Dict[str, Dict[str, Any]] = {}
         self.last_report_guard_stats: Dict[str, Any] = {}
@@ -131,7 +176,18 @@ class AIService:
                     parts.append(text)
             return "；".join(parts).strip()
         if isinstance(value, dict):
-            for key in ("content", "detail", "description", "summary", "title", "topic", "name", "reason", "analysis", "text"):
+            for key in (
+                "content",
+                "detail",
+                "description",
+                "summary",
+                "title",
+                "topic",
+                "name",
+                "reason",
+                "analysis",
+                "text",
+            ):
                 text = AIService._to_text(value.get(key))
                 if text:
                     return text
@@ -181,8 +237,26 @@ class AIService:
             return canonical
 
         lowered = canonical.lower()
-        bullish_keywords = ("bullish", "看涨", "做多", "偏多", "上行", "增配", "买入", "risk-on")
-        bearish_keywords = ("bearish", "看跌", "做空", "偏空", "下行", "减配", "卖出", "risk-off")
+        bullish_keywords = (
+            "bullish",
+            "看涨",
+            "做多",
+            "偏多",
+            "上行",
+            "增配",
+            "买入",
+            "risk-on",
+        )
+        bearish_keywords = (
+            "bearish",
+            "看跌",
+            "做空",
+            "偏空",
+            "下行",
+            "减配",
+            "卖出",
+            "risk-off",
+        )
         neutral_keywords = ("neutral", "中性", "观望", "震荡", "平衡")
 
         if any(keyword in lowered for keyword in bullish_keywords):
@@ -240,7 +314,7 @@ class AIService:
                     _append_source(
                         item.get("name") or item.get("source") or item.get("title"),
                         item.get("tier"),
-                        item.get("url") or item.get("link")
+                        item.get("url") or item.get("link"),
                     )
                 else:
                     _append_source(item)
@@ -248,7 +322,7 @@ class AIService:
             _append_source(
                 value.get("name") or value.get("source") or value.get("title"),
                 value.get("tier"),
-                value.get("url") or value.get("link")
+                value.get("url") or value.get("link"),
             )
         elif value is not None:
             _append_source(value)
@@ -262,7 +336,11 @@ class AIService:
         normalized: List[Dict[str, Any]] = []
 
         for raw_item in digest:
-            item = raw_item if isinstance(raw_item, dict) else {"content": self._to_text(raw_item)}
+            item = (
+                raw_item
+                if isinstance(raw_item, dict)
+                else {"content": self._to_text(raw_item)}
+            )
             confidence = self._normalize_confidence(item.get("confidence"))
             content = (
                 self._to_text(item.get("content"))
@@ -273,7 +351,12 @@ class AIService:
             if not content:
                 continue
 
-            category = self._to_text(item.get("category") or item.get("topicCategory") or item.get("type") or "general").lower()
+            category = self._to_text(
+                item.get("category")
+                or item.get("topicCategory")
+                or item.get("type")
+                or "general"
+            ).lower()
             credibility = self._to_text(item.get("credibility")).lower()
             if credibility not in VALID_CREDIBILITY:
                 credibility = self._confidence_to_credibility(confidence)
@@ -281,28 +364,36 @@ class AIService:
             if importance not in VALID_IMPORTANCE:
                 importance = self._confidence_to_importance(confidence)
 
-            normalized.append({
-                "content": content,
-                "category": category or "general",
-                "sources": self._normalize_sources(item.get("sources") or item.get("source") or item.get("evidenceSources")),
-                "credibility": credibility,
-                "credibilityReason": (
-                    self._to_text(item.get("credibilityReason"))
-                    or self._to_text(item.get("evidence"))
-                    or "基于信源交叉验证与历史可信度评估。"
-                ),
-                "importance": importance,
-            })
+            normalized.append(
+                {
+                    "content": content,
+                    "category": category or "general",
+                    "sources": self._normalize_sources(
+                        item.get("sources")
+                        or item.get("source")
+                        or item.get("evidenceSources")
+                    ),
+                    "credibility": credibility,
+                    "credibilityReason": (
+                        self._to_text(item.get("credibilityReason"))
+                        or self._to_text(item.get("evidence"))
+                        or "基于信源交叉验证与历史可信度评估。"
+                    ),
+                    "importance": importance,
+                }
+            )
 
         if not normalized:
-            normalized.append({
-                "content": "暂无可用的结构化情报摘要，建议复核原始新闻上下文。",
-                "category": "general",
-                "sources": [{"name": "System", "tier": 3}],
-                "credibility": "low",
-                "credibilityReason": "自动兜底生成，待人工复核。",
-                "importance": "low",
-            })
+            normalized.append(
+                {
+                    "content": "暂无可用的结构化情报摘要，建议复核原始新闻上下文。",
+                    "category": "general",
+                    "sources": [{"name": "System", "tier": 3}],
+                    "credibility": "low",
+                    "credibilityReason": "自动兜底生成，待人工复核。",
+                    "importance": "low",
+                }
+            )
         return normalized
 
     def _normalize_global_events(self, value: Any) -> List[Dict[str, Any]]:
@@ -310,7 +401,11 @@ class AIService:
         normalized: List[Dict[str, Any]] = []
 
         for raw_item in events:
-            item = raw_item if isinstance(raw_item, dict) else {"detail": self._to_text(raw_item)}
+            item = (
+                raw_item
+                if isinstance(raw_item, dict)
+                else {"detail": self._to_text(raw_item)}
+            )
             title = (
                 self._to_text(item.get("title"))
                 or self._to_text(item.get("event"))
@@ -337,7 +432,9 @@ class AIService:
             category = self._to_text(item.get("category") or item.get("type"))
             if category:
                 event["category"] = category
-            threat_level = self._normalize_threat_level(item.get("threatLevel") or item.get("severity"))
+            threat_level = self._normalize_threat_level(
+                item.get("threatLevel") or item.get("severity")
+            )
             if threat_level:
                 event["threatLevel"] = threat_level
             normalized.append(event)
@@ -349,7 +446,11 @@ class AIService:
         normalized: List[Dict[str, Any]] = []
 
         for raw_item in trends:
-            item = raw_item if isinstance(raw_item, dict) else {"rationale": self._to_text(raw_item)}
+            item = (
+                raw_item
+                if isinstance(raw_item, dict)
+                else {"rationale": self._to_text(raw_item)}
+            )
             asset_class = (
                 self._to_text(item.get("assetClass"))
                 or self._to_text(item.get("asset"))
@@ -366,7 +467,9 @@ class AIService:
                 or "基于当前事件链与市场定价关系的保守研判。"
             )
             confidence = self._normalize_confidence(item.get("confidence"))
-            timeframe = self._to_text(item.get("timeframe") or item.get("horizon")) or None
+            timeframe = (
+                self._to_text(item.get("timeframe") or item.get("horizon")) or None
+            )
 
             trend_item: Dict[str, Any] = {
                 "assetClass": asset_class,
@@ -381,7 +484,9 @@ class AIService:
 
         return normalized
 
-    def _normalize_text_list_items(self, value: Any, *, max_items: int = 4) -> List[str]:
+    def _normalize_text_list_items(
+        self, value: Any, *, max_items: int = 4
+    ) -> List[str]:
         items = value if isinstance(value, list) else [value]
         normalized: List[str] = []
         for item in items:
@@ -422,7 +527,9 @@ class AIService:
 
         return normalized
 
-    def _normalize_macro_transmission_chain(self, value: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_macro_transmission_chain(
+        self, value: Any
+    ) -> Optional[Dict[str, Any]]:
         item = value if isinstance(value, dict) else {}
         if not item:
             return None
@@ -474,7 +581,16 @@ class AIService:
             if allocation_implication:
                 steps.append({"stage": "配置含义", "driver": allocation_implication})
 
-        if not any([headline, shock_source, macro_variables, market_pricing, allocation_implication, steps]):
+        if not any(
+            [
+                headline,
+                shock_source,
+                macro_variables,
+                market_pricing,
+                allocation_implication,
+                steps,
+            ]
+        ):
             return None
 
         if not headline:
@@ -502,12 +618,24 @@ class AIService:
             normalized["confidence"] = confidence
         return normalized
 
-    def _normalize_asset_transmission_breakdowns(self, value: Any) -> List[Dict[str, Any]]:
-        breakdowns = value if isinstance(value, list) else [value] if isinstance(value, dict) else []
+    def _normalize_asset_transmission_breakdowns(
+        self, value: Any
+    ) -> List[Dict[str, Any]]:
+        breakdowns = (
+            value
+            if isinstance(value, list)
+            else [value]
+            if isinstance(value, dict)
+            else []
+        )
         normalized: List[Dict[str, Any]] = []
 
         for raw_item in breakdowns:
-            item = raw_item if isinstance(raw_item, dict) else {"coreView": self._to_text(raw_item)}
+            item = (
+                raw_item
+                if isinstance(raw_item, dict)
+                else {"coreView": self._to_text(raw_item)}
+            )
             asset_class = (
                 self._to_text(item.get("assetClass"))
                 or self._to_text(item.get("asset"))
@@ -533,10 +661,14 @@ class AIService:
                 max_items=4,
             )
             watch_signals = self._normalize_text_list_items(
-                item.get("watchSignals") or item.get("watchpoints") or item.get("signals"),
+                item.get("watchSignals")
+                or item.get("watchpoints")
+                or item.get("signals"),
                 max_items=4,
             )
-            timeframe = self._to_text(item.get("timeframe") or item.get("horizon")) or None
+            timeframe = (
+                self._to_text(item.get("timeframe") or item.get("horizon")) or None
+            )
             confidence = self._normalize_confidence(item.get("confidence"))
 
             if not core_view and transmission_path:
@@ -550,7 +682,8 @@ class AIService:
                 "assetClass": asset_class,
                 "trend": trend,
                 "coreView": core_view or "该资产正在表达当前主线。",
-                "transmissionPath": transmission_path or "事件主线 -> 宏观变量 -> 资产定价",
+                "transmissionPath": transmission_path
+                or "事件主线 -> 宏观变量 -> 资产定价",
                 "keyDrivers": key_drivers,
                 "watchSignals": watch_signals,
             }
@@ -597,7 +730,11 @@ class AIService:
             or self._to_text(data.get("macro"))
         )
         if not executive_summary:
-            executive_summary = economic_analysis[:160] if economic_analysis else "暂无明确主线，建议关注后续数据更新。"
+            executive_summary = (
+                economic_analysis[:160]
+                if economic_analysis
+                else "暂无明确主线，建议关注后续数据更新。"
+            )
         if not economic_analysis:
             economic_analysis = executive_summary
 
@@ -611,9 +748,13 @@ class AIService:
 
         normalized: Dict[str, Any] = {
             "date": date_text,
-            "intelligenceDigest": self._normalize_intelligence_digest(data.get("intelligenceDigest")),
+            "intelligenceDigest": self._normalize_intelligence_digest(
+                data.get("intelligenceDigest")
+            ),
             "executiveSummary": executive_summary,
-            "globalEvents": self._normalize_global_events(data.get("globalEvents") or data.get("majorEvents")),
+            "globalEvents": self._normalize_global_events(
+                data.get("globalEvents") or data.get("majorEvents")
+            ),
             "economicAnalysis": economic_analysis,
             "macroTransmissionChain": self._normalize_macro_transmission_chain(
                 data.get("macroTransmissionChain")
@@ -621,15 +762,18 @@ class AIService:
                 or data.get("macroChain")
             ),
             "assetTransmissionBreakdowns": self._normalize_asset_transmission_breakdowns(
-                data.get("assetTransmissionBreakdowns")
-                or data.get("assetBreakdowns")
+                data.get("assetTransmissionBreakdowns") or data.get("assetBreakdowns")
             ),
-            "investmentTrends": self._normalize_investment_trends(data.get("investmentTrends")),
+            "investmentTrends": self._normalize_investment_trends(
+                data.get("investmentTrends")
+            ),
         }
         if agent_insights:
             normalized["agentInsights"] = agent_insights
 
-        risk_assessment = self._to_text(data.get("riskAssessment") or data.get("risk")) or None
+        risk_assessment = (
+            self._to_text(data.get("riskAssessment") or data.get("risk")) or None
+        )
         source_analysis = self._to_text(data.get("sourceAnalysis")) or None
         if risk_assessment:
             normalized["riskAssessment"] = risk_assessment
@@ -640,8 +784,18 @@ class AIService:
 
     def _active_providers(self) -> List[Dict[str, str]]:
         providers = [
-            {"name": "Primary", "url": CONFIG.ai_api_url, "key": CONFIG.ai_api_key, "model": CONFIG.ai_model},
-            {"name": "Fallback", "url": CONFIG.ai_fallback_url, "key": CONFIG.ai_fallback_key, "model": CONFIG.ai_fallback_model},
+            {
+                "name": "Primary",
+                "url": CONFIG.ai_api_url,
+                "key": CONFIG.ai_api_key,
+                "model": CONFIG.ai_model,
+            },
+            {
+                "name": "Fallback",
+                "url": CONFIG.ai_fallback_url,
+                "key": CONFIG.ai_fallback_key,
+                "model": CONFIG.ai_fallback_model,
+            },
         ]
         return [p for p in providers if p["url"] and p["key"]]
 
@@ -673,7 +827,9 @@ class AIService:
                 queue.extend(current)
         return None
 
-    async def _fetch_provider_model_window(self, provider: Dict[str, str]) -> Optional[int]:
+    async def _fetch_provider_model_window(
+        self, provider: Dict[str, str]
+    ) -> Optional[int]:
         base_url = self._provider_base_url(provider["url"])
         cache_key = self._window_cache_key(base_url, provider["model"])
         now = time.time()
@@ -688,16 +844,22 @@ class AIService:
             payload = meta.model_dump() if hasattr(meta, "model_dump") else dict(meta)
             window = self._extract_context_window(payload)
         except Exception as e:
-            logger.warning(f"{provider['name']} 模型窗口元数据获取失败 ({provider['model']}): {e}")
+            logger.warning(
+                f"{provider['name']} 模型窗口元数据获取失败 ({provider['model']}): {e}"
+            )
 
         if window is None:
             window = MODEL_CONTEXT_WINDOW_FALLBACKS.get(provider["model"])
             if window:
-                logger.warning(f"{provider['name']} 使用模型窗口映射回退: model={provider['model']}, window={window}")
+                logger.warning(
+                    f"{provider['name']} 使用模型窗口映射回退: model={provider['model']}, window={window}"
+                )
 
         if window is None:
             window = DEFAULT_CONTEXT_WINDOW
-            logger.warning(f"{provider['name']} 使用默认模型窗口回退: model={provider['model']}, window={window}")
+            logger.warning(
+                f"{provider['name']} 使用默认模型窗口回退: model={provider['model']}, window={window}"
+            )
 
         self._window_cache[cache_key] = {
             "window": window,
@@ -740,7 +902,9 @@ class AIService:
 
     async def build_market_price_context(self) -> str:
         """构建实时市场上下文，失败时自动回退到占位文本。"""
-        symbols = get_default_market_symbols(limit=CONFIG.ai_market_context_symbols_limit)
+        symbols = get_default_market_symbols(
+            limit=CONFIG.ai_market_context_symbols_limit
+        )
         if not symbols:
             symbols = ["GC=F", "CL=F"]
 
@@ -826,15 +990,68 @@ class AIService:
 
         timeout_sec = max(CONFIG.ai_symbol_search_timeout_ms, 1000) / 1000
         try:
-            symbol = await asyncio.wait_for(search_market_symbol(asset_class), timeout=timeout_sec)
+            symbol = await asyncio.wait_for(
+                search_market_symbol(asset_class), timeout=timeout_sec
+            )
         except Exception as e:
             logger.debug(f"自动解析 symbol 失败 '{asset_class}': {e}")
             symbol = None
         self._asset_symbol_cache[normalized] = symbol
         return symbol
 
+    async def call_agent_structured(
+        self,
+        name: str,
+        system_prompt: str,
+        user_content: str,
+        response_model: Type[T],
+        max_retries: int = 2,
+    ) -> T:
+        inst = _ensure_instructor()
+        if inst is None:
+            raw = await self.call_agent(
+                name, system_prompt, user_content, use_json=True
+            )
+            parsed = json.loads(extract_json(raw))
+            return response_model.model_validate(parsed)
+
+        providers = self._active_providers()
+        for p in providers:
+            try:
+                base_client = AsyncOpenAI(
+                    api_key=p["key"],
+                    base_url=self._provider_base_url(p["url"]),
+                )
+                client = inst.from_openai(base_client)
+                read_timeout = CONFIG.ai_timeout_ms / 1000
+                timeout = httpx.Timeout(timeout=read_timeout, connect=10.0)
+                result = await client.chat.completions.create(
+                    model=p["model"],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    response_model=response_model,
+                    max_retries=max_retries,
+                    timeout=timeout,
+                )
+                logger.info(f"{name} 结构化调用成功 (Model: {p['model']})")
+                return result
+            except Exception as e:
+                logger.warning(f"{name} 结构化调用失败 ({p['name']}/{p['model']}): {e}")
+                continue
+
+        raise Exception(f"{name} 所有提供商结构化调用均失败")
+
     async def parse_daily_report_json(self, raw_text: str) -> Dict[str, Any]:
-        """解析日报 JSON；若失败，自动触发一次修复重试。"""
+        inst = _ensure_instructor()
+        if inst is not None:
+            try:
+                report = await self._parse_daily_report_structured(raw_text)
+                return self.normalize_daily_report_payload(report.model_dump())
+            except Exception as e:
+                logger.warning(f"instructor 结构化解析失败，回退到 JSON 模式: {e}")
+
         try:
             parsed = json.loads(extract_json(raw_text))
             return self.normalize_daily_report_payload(parsed)
@@ -846,11 +1063,27 @@ class AIService:
             parsed = json.loads(extract_json(repaired_raw))
             return self.normalize_daily_report_payload(parsed)
         except json.JSONDecodeError as e:
-            snippet = extract_json(repaired_raw)[:400].replace('\n', ' ')
-            raise ValueError(f"MarketStrategist JSON 修复后仍非法: {e}. snippet={snippet}") from e
+            snippet = extract_json(repaired_raw)[:400].replace("\n", " ")
+            raise ValueError(
+                f"MarketStrategist JSON 修复后仍非法: {e}. snippet={snippet}"
+            ) from e
+
+    async def _parse_daily_report_structured(self, raw_text: str) -> DailyReport:
+        repair_system_prompt = (
+            "你是一个严格的 JSON 修复与结构化引擎。"
+            "将输入文本解析为符合 DailyReport schema 的结构化数据。"
+            "保留所有字段语义，不得编造不存在于原文的信息。"
+        )
+        safe_raw = truncate_to_token_budget(raw_text, max_tokens=6000)
+        return await self.call_agent_structured(
+            "MarketStrategistStructured",
+            repair_system_prompt,
+            safe_raw,
+            DailyReport,
+            max_retries=2,
+        )
 
     async def repair_daily_report_json(self, broken_raw: str) -> str:
-        """调用 LLM 将无效输出修复为合法 JSON 对象。"""
         repair_system_prompt = (
             "你是一个严格的 JSON 修复器。"
             "你只能输出一个合法 JSON 对象，不得输出 Markdown、注释、解释文字。"
@@ -877,32 +1110,97 @@ class AIService:
             "MarketStrategistRepair",
             repair_system_prompt,
             repair_user_content,
-            use_json=True
+            use_json=True,
+        )
+        schema_hint = (
+            "必须保留/补全字段: "
+            "date(string), intelligenceDigest(array), executiveSummary(string), "
+            "macroTransmissionChain(object), globalEvents(array), economicAnalysis(string), "
+            "assetTransmissionBreakdowns(array), investmentTrends(array)。"
+            "可选字段: agentInsights(object), riskAssessment(string), sourceAnalysis(string)。"
+        )
+        safe_raw = truncate_to_token_budget(broken_raw, max_tokens=4000)
+        repair_user_content = f"""
+原始输出不是合法 JSON，请修复。
+
+{schema_hint}
+
+[BROKEN_OUTPUT]
+```text
+{safe_raw}
+```
+"""
+        return await self.call_agent(
+            "MarketStrategistRepair",
+            repair_system_prompt,
+            repair_user_content,
+            use_json=True,
         )
 
-    async def call_agent(self, name: str, system_prompt: str, user_content: str, use_json: bool = True) -> str:
-        """调用 AI 模型（含回退逻辑）"""
+    async def call_agent(
+        self, name: str, system_prompt: str, user_content: str, use_json: bool = True
+    ) -> str:
+        """调用 AI 模型（含回退逻辑 + Langfuse 可观测性）"""
         providers = self._active_providers()
+        lf = _ensure_langfuse()
+        trace = None
+        if lf:
+            try:
+                trace = lf.trace(name=f"agent/{name}")
+            except Exception:
+                trace = None
 
         for p in providers:
+            span = None
+            if trace:
+                try:
+                    span = trace.span(
+                        name=f"llm/{p['name']}",
+                        metadata={"model": p["model"], "use_json": use_json},
+                    )
+                except Exception:
+                    span = None
             try:
-                # 重新初始化 client 以支持不同 provider 的 base_url
-                client = AsyncOpenAI(api_key=p["key"], base_url=self._provider_base_url(p["url"]))
+                client = AsyncOpenAI(
+                    api_key=p["key"], base_url=self._provider_base_url(p["url"])
+                )
                 read_timeout = CONFIG.ai_timeout_ms / 1000
                 timeout = httpx.Timeout(timeout=read_timeout, connect=10.0)
+                t0 = time.time()
                 response = await client.chat.completions.create(
                     model=p["model"],
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content}
+                        {"role": "user", "content": user_content},
                     ],
                     response_format={"type": "json_object"} if use_json else None,
-                    timeout=timeout
+                    timeout=timeout,
                 )
-                logger.info(f"{name} 调用成功 (Model: {p['model']})")
-                return response.choices[0].message.content or ""
+                elapsed_ms = int((time.time() - t0) * 1000)
+                result = response.choices[0].message.content or ""
+                logger.info(f"{name} 调用成功 (Model: {p['model']}, {elapsed_ms}ms)")
+                if span:
+                    try:
+                        usage = response.usage
+                        span.end(
+                            metadata={
+                                "elapsed_ms": elapsed_ms,
+                                "input_tokens": getattr(usage, "prompt_tokens", None),
+                                "output_tokens": getattr(
+                                    usage, "completion_tokens", None
+                                ),
+                            }
+                        )
+                    except Exception:
+                        pass
+                return result
             except Exception as e:
                 logger.warning(f"{name} 调用失败 ({p['name']}/{p['model']}): {e}")
+                if span:
+                    try:
+                        span.end(metadata={"error": str(e)})
+                    except Exception:
+                        pass
                 continue
-        
+
         raise Exception(f"{name} 所有提供商调用均失败")

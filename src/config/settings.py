@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     event_intelligence_embedding_model: str = Field(
         default="bge-m3", validation_alias="EVENT_INTELLIGENCE_EMBEDDING_MODEL"
     )
+    embedding_provider: str = Field(
+        default="openai", validation_alias="EMBEDDING_PROVIDER"
+    )
+    local_embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5", validation_alias="LOCAL_EMBEDDING_MODEL"
+    )
+    gliner_model: str = Field(
+        default="urchade/gliner_multi-v2.1", validation_alias="GLINER_MODEL"
+    )
     event_intelligence_reranker_model: str = Field(
         default="bge-reranker-v2-m3",
         validation_alias="EVENT_INTELLIGENCE_RERANKER_MODEL",

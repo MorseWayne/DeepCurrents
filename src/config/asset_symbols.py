@@ -1,7 +1,23 @@
 import json
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Any, Dict, List, Optional
+
 from .settings import CONFIG
+
+_rapidfuzz: Any = None
+
+
+def _ensure_rapidfuzz() -> Any:
+    global _rapidfuzz
+    if _rapidfuzz is None:
+        try:
+            from rapidfuzz import fuzz as _rf
+
+            _rapidfuzz = _rf
+        except ImportError:
+            _rapidfuzz = False
+    return _rapidfuzz
+
 
 # Fallback map to avoid total failure when file is missing/invalid.
 DEFAULT_FALLBACK_MAP: Dict[str, str] = {
@@ -63,7 +79,9 @@ def get_asset_symbol_map(extra_map: Optional[Dict[str, str]] = None) -> Dict[str
     return merged
 
 
-def resolve_asset_symbol(asset_class: str, symbol_map: Optional[Dict[str, str]] = None) -> Optional[str]:
+def resolve_asset_symbol(
+    asset_class: str, symbol_map: Optional[Dict[str, str]] = None
+) -> Optional[str]:
     if not asset_class:
         return None
 
@@ -73,10 +91,25 @@ def resolve_asset_symbol(asset_class: str, symbol_map: Optional[Dict[str, str]] 
     for key in sorted(merged_map.keys(), key=len, reverse=True):
         if key in normalized:
             return merged_map[key]
+
+    rf = _ensure_rapidfuzz()
+    if rf:
+        best_key = ""
+        best_score = 0
+        for key in merged_map:
+            score: int = rf.partial_ratio(normalized, key)
+            if score > best_score:
+                best_score = score
+                best_key = key
+        if best_score >= 75 and best_key:
+            return merged_map[best_key]
+
     return None
 
 
-def get_default_market_symbols(limit: int = 6, symbol_map: Optional[Dict[str, str]] = None) -> List[str]:
+def get_default_market_symbols(
+    limit: int = 6, symbol_map: Optional[Dict[str, str]] = None
+) -> List[str]:
     merged_map = get_asset_symbol_map(symbol_map)
     safe_limit = max(limit, 1)
     symbols: List[str] = []

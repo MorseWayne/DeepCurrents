@@ -238,12 +238,11 @@ class RSSCollector:
                     summary = raw_summary if isinstance(raw_summary, str) else ""
                     final_content = summary
 
-                    # 强化全文提取：T1/T2 必须提取，或者摘要太短时提取
                     should_extract = source.tier <= 2 or len(summary) < 250
+                    extraction_method = "rss_summary"
                     if should_extract:
                         extract_proxy = resolve_request_proxy(link, CONFIG.https_proxy)
                         try:
-                            # 增加重试机制和更长的超时
                             extracted = await Extractor.extract(
                                 link, session=active_session, proxy=extract_proxy
                             )
@@ -253,11 +252,19 @@ class RSSCollector:
                             if isinstance(extracted_content, str) and len(
                                 extracted_content
                             ) > len(final_content):
-                                # 只有当提取的内容明显更有价值时才替换
                                 final_content = extracted_content
-                                logger.debug(f"Successfully extracted full-text for {source.name}: {len(final_content)} chars")
+                                extraction_method = (
+                                    extracted.get("extraction_method", "unknown")
+                                    if extracted
+                                    else "unknown"
+                                )
+                                logger.debug(
+                                    f"Full-text via {extraction_method} for {source.name}: {len(final_content)} chars"
+                                )
                         except Exception as e:
-                            logger.warning(f"Failed to extract full-text for {link}: {e}")
+                            logger.warning(
+                                f"Failed to extract full-text for {link}: {e}"
+                            )
 
                     raw_published = entry.get("published") or entry.get("updated")
                     published = (
@@ -272,6 +279,7 @@ class RSSCollector:
                             content=final_content,
                             source=source,
                             published=published,
+                            extraction_method=extraction_method,
                         )
                         inserted = bool(ingest_result.get("inserted"))
                         self._merge_ingestion_metrics(source_metrics, ingest_result)
@@ -307,6 +315,7 @@ class RSSCollector:
         content: str,
         source: Source,
         published: str | None,
+        extraction_method: str = "rss_summary",
     ) -> dict[str, Any]:
         article_normalizer = self.article_normalizer
         article_repository = self.article_repository
@@ -336,6 +345,8 @@ class RSSCollector:
                 "source": source.name,
                 "sourceType": source.type,
                 "tier": source.tier,
+                "extraction_method": extraction_method,
+                "content_length": len(content),
             },
         }
 
@@ -427,7 +438,9 @@ class RSSCollector:
                                 f"[EIL] Failed to enrich event {event_id} for {link}: {exc}"
                             )
             except Exception as exc:
-                logger.error(f"[EIL] Failed to upsert event candidate for {link}: {exc}")
+                logger.error(
+                    f"[EIL] Failed to upsert event candidate for {link}: {exc}"
+                )
 
         return {
             "inserted": created or duplicate_refresh,
@@ -480,7 +493,9 @@ class RSSCollector:
         if total_duplicate_refreshes <= 0:
             return
         duplicate_sources = sum(
-            1 for result in results if self._safe_int(result.get("duplicate_refreshes")) > 0
+            1
+            for result in results
+            if self._safe_int(result.get("duplicate_refreshes")) > 0
         )
         logger.info(
             "[EIL] duplicate refresh summary: "

@@ -215,7 +215,10 @@ class FakeReportContextBuilder:
                         "stateChange": "escalated",
                         "whyItMatters": "Shipping disruption raises energy risk.",
                         "marketChannels": ["energy", "shipping"],
-                        "lastTransition": {"toState": "escalating", "reason": "risk spread"},
+                        "lastTransition": {
+                            "toState": "escalating",
+                            "reason": "risk spread",
+                        },
                         "evidenceRefs": ["art_1"],
                     },
                 }
@@ -311,7 +314,9 @@ async def test_report_orchestrator_generates_event_centric_report_from_services(
     builder = FakeReportContextBuilder()
     orchestrator = ReportOrchestrator(ai_service, builder)
 
-    with patch("src.services.report_orchestrator.log_stage_metrics") as mock_log_metrics:
+    with patch(
+        "src.services.report_orchestrator.log_stage_metrics"
+    ) as mock_log_metrics:
         report = await orchestrator.generate_event_centric_report(
             statuses=["new", "updated"],
             profile="risk_daily",
@@ -330,6 +335,7 @@ async def test_report_orchestrator_generates_event_centric_report_from_services(
         "MacroAnalyst",
         "SentimentAnalyst",
         "MarketStrategist",
+        "RiskManager",
     ]
     strategist_call = ai_service.agent_calls[2]
     assert "[EVENT BRIEFS]" in strategist_call["user_content"]
@@ -444,11 +450,22 @@ async def test_report_orchestrator_records_report_trace_when_tracker_is_injected
     call = tracker.calls[0]
     assert call["profile"] == "risk_daily"
     assert call["version"] == "v1"
-    assert call["context_package"]["selected_event_briefs"][0]["brief_id"] == "brief_evt_energy_v1"
+    assert (
+        call["context_package"]["selected_event_briefs"][0]["brief_id"]
+        == "brief_evt_energy_v1"
+    )
     assert call["report_metrics"]["context_event_count"] == 1
     assert call["guard_stats"]["post_guard_tokens"] > 0
-    assert orchestrator.last_report_trace["summary"]["report_run_id"] == "report_risk_daily_2026-03-13"
-    assert orchestrator.last_report_trace["event_links"][0]["rationale_json"]["brief_version"] == "v1"
+    assert (
+        orchestrator.last_report_trace["summary"]["report_run_id"]
+        == "report_risk_daily_2026-03-13"
+    )
+    assert (
+        orchestrator.last_report_trace["event_links"][0]["rationale_json"][
+            "brief_version"
+        ]
+        == "v1"
+    )
 
 
 @pytest.mark.asyncio

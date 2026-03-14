@@ -19,3 +19,19 @@ httpx[socks]
 asyncpg>=0.29.0
 redis>=5.0.0
 qdrant-client>=1.9.0
+# ── Phase 1: Information Density ──
+trafilatura>=1.8.0
+readability-lxml>=0.8.0
+instructor>=1.4.0
+# ── Phase 2: Local ML Migration ──
+fastembed>=0.4.0
+datasketch>=1.6.0
+rapidfuzz>=3.0.0
+gliner>=0.2.0
+# ── Phase 3: Deep Integration ──
+langfuse>=2.0.0
+akshare>=1.14.0
+transformers>=4.40.0
+# ── Phase 4: Advanced Capabilities ──
+hdbscan>=0.8.33
+sentence-transformers>=3.0.0

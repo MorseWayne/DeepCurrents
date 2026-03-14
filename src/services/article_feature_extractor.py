@@ -100,6 +100,32 @@ class OpenAIEmbeddingClient:
         return [float(item) for item in response.data[0].embedding]
 
 
+class LocalEmbeddingClient:
+    def __init__(self, *, model_name: str = "BAAI/bge-small-en-v1.5"):
+        self._model_name = model_name
+        self._model: Any = None
+
+    def _ensure_model(self) -> Any:
+        if self._model is None:
+            try:
+                from fastembed import TextEmbedding
+            except ImportError as exc:
+                raise ImportError(
+                    "LocalEmbeddingClient requires `fastembed`. "
+                    "Install with: pip install fastembed>=0.4.0"
+                ) from exc
+            self._model = TextEmbedding(model_name=self._model_name)
+        return self._model
+
+    async def embed(self, text: str) -> list[float]:
+        import asyncio
+
+        model = self._ensure_model()
+        loop = asyncio.get_running_loop()
+        embeddings = await loop.run_in_executor(None, lambda: list(model.embed([text])))
+        return [float(v) for v in embeddings[0]]
+
+
 class ArticleFeatureExtractor:
     def __init__(
         self,
@@ -120,12 +146,17 @@ class ArticleFeatureExtractor:
         if embedding_client is None:
             from ..config.settings import CONFIG
 
-            embedding_client = OpenAIEmbeddingClient(
-                api_key=CONFIG.ai_api_key,
-                base_url=self._embedding_base_url(CONFIG.ai_api_url),
-                model=embedding_model,
-                timeout_ms=CONFIG.ai_timeout_ms,
-            )
+            if CONFIG.embedding_provider == "local":
+                embedding_client = LocalEmbeddingClient(
+                    model_name=CONFIG.local_embedding_model,
+                )
+            else:
+                embedding_client = OpenAIEmbeddingClient(
+                    api_key=CONFIG.ai_api_key,
+                    base_url=self._embedding_base_url(CONFIG.ai_api_url),
+                    model=embedding_model,
+                    timeout_ms=CONFIG.ai_timeout_ms,
+                )
         self.embedding_client = embedding_client
         self.feature_version = feature_version
         self.vector_collection = vector_collection

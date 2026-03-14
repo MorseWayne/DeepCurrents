@@ -5,6 +5,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, Protocol, Sequence
 
+from loguru import logger
+
 from ..config.settings import CONFIG
 from ..utils.text_similarity import (
     dice_coefficient,
@@ -13,6 +15,22 @@ from ..utils.text_similarity import (
 )
 from ..utils.tokenizer import tokenize
 from .article_models import ArticleRecord
+
+# ── Lazy optional: datasketch (MinHash+LSH near-dedup) ──
+_datasketch: Any = None
+
+
+def _ensure_datasketch() -> Any:
+    global _datasketch
+    if _datasketch is None:
+        try:
+            import datasketch as _ds
+
+            _datasketch = _ds
+        except ImportError:
+            _datasketch = False
+            logger.debug("datasketch not installed; MinHash dedup disabled")
+    return _datasketch
 
 
 class ArticleRepositoryLike(Protocol):
@@ -56,6 +74,8 @@ class SemanticDeduper:
         semantic_score_threshold: float = 0.82,
         semantic_strong_score_threshold: float = 0.92,
         vector_collection: str = "article_features",
+        minhash_threshold: float = 0.5,
+        minhash_num_perm: int = 128,
     ):
         self.article_repository = article_repository
         self.vector_store = vector_store
@@ -68,6 +88,8 @@ class SemanticDeduper:
         self.semantic_score_threshold = semantic_score_threshold
         self.semantic_strong_score_threshold = semantic_strong_score_threshold
         self.vector_collection = vector_collection
+        self.minhash_threshold = minhash_threshold
+        self.minhash_num_perm = minhash_num_perm
 
     async def link_cheap_duplicates(
         self, article: ArticleRecord | Mapping[str, Any]
@@ -77,18 +99,29 @@ class SemanticDeduper:
         exact_links = await self._link_exact_duplicates(seed)
         links.extend(exact_links)
         seed_id = self._text(seed.get("article_id"))
-        exact_candidate_ids: set[str] = set()
+        matched_ids: set[str] = set()
         for link in exact_links:
             left_id = self._text(link.get("left_article_id"))
             right_id = self._text(link.get("right_article_id"))
             if left_id and left_id != seed_id:
-                exact_candidate_ids.add(left_id)
+                matched_ids.add(left_id)
             if right_id and right_id != seed_id:
-                exact_candidate_ids.add(right_id)
+                matched_ids.add(right_id)
+        minhash_links = await self._link_minhash_duplicates(
+            seed, skip_candidate_ids=matched_ids
+        )
+        links.extend(minhash_links)
+        for link in minhash_links:
+            left_id = self._text(link.get("left_article_id"))
+            right_id = self._text(link.get("right_article_id"))
+            if left_id and left_id != seed_id:
+                matched_ids.add(left_id)
+            if right_id and right_id != seed_id:
+                matched_ids.add(right_id)
         links.extend(
             await self._link_near_duplicates(
                 seed,
-                skip_candidate_ids=exact_candidate_ids,
+                skip_candidate_ids=matched_ids,
             )
         )
         return links
@@ -244,6 +277,105 @@ class SemanticDeduper:
                 )
             )
         return links
+
+    async def _link_minhash_duplicates(
+        self,
+        seed: Mapping[str, Any],
+        *,
+        skip_candidate_ids: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        ds = _ensure_datasketch()
+        if not ds:
+            return []
+
+        seed_shingles = self._content_shingles(seed)
+        if not seed_shingles:
+            return []
+
+        candidates = await self.article_repository.list_recent_articles(
+            since=self._candidate_since(seed),
+            limit=self.recent_limit,
+        )
+        if not candidates:
+            return []
+
+        seed_minhash = self._compute_minhash(ds, seed_shingles, self.minhash_num_perm)
+        lsh = ds.MinHashLSH(
+            threshold=self.minhash_threshold, num_perm=self.minhash_num_perm
+        )
+
+        candidate_map: dict[str, Mapping[str, Any]] = {}
+        candidate_minhashes: dict[str, Any] = {}
+        for candidate in candidates:
+            cid = self._text(candidate.get("article_id"))
+            if (
+                not cid
+                or cid == seed.get("article_id")
+                or (skip_candidate_ids and cid in skip_candidate_ids)
+            ):
+                continue
+            shingles = self._content_shingles(candidate)
+            if not shingles:
+                continue
+            mh = self._compute_minhash(ds, shingles, self.minhash_num_perm)
+            try:
+                lsh.insert(cid, mh)
+            except ValueError:
+                continue
+            candidate_map[cid] = candidate
+            candidate_minhashes[cid] = mh
+
+        try:
+            hit_ids: list[str] = lsh.query(seed_minhash)
+        except Exception:
+            return []
+
+        links: list[dict[str, Any]] = []
+        for cid in hit_ids:
+            if cid not in candidate_minhashes:
+                continue
+            jaccard_est = seed_minhash.jaccard(candidate_minhashes[cid])
+            if jaccard_est < self.minhash_threshold:
+                continue
+            links.append(
+                await self._create_link(
+                    self._text(seed.get("article_id")),
+                    cid,
+                    relation_type="minhash",
+                    confidence=round(jaccard_est, 3),
+                    reason={
+                        "minhash_jaccard": round(jaccard_est, 3),
+                        "num_perm": self.minhash_num_perm,
+                    },
+                )
+            )
+        return links
+
+    def _content_shingles(
+        self, article: Mapping[str, Any], shingle_size: int = 3
+    ) -> set[str]:
+        text = self._text(
+            article.get("clean_content")
+            or article.get("content")
+            or article.get("normalized_title")
+            or article.get("title")
+        )
+        if not text:
+            return set()
+        tokens = list(tokenize(text))
+        if len(tokens) < shingle_size:
+            return set(tokens) if tokens else set()
+        return {
+            " ".join(tokens[i : i + shingle_size])
+            for i in range(len(tokens) - shingle_size + 1)
+        }
+
+    @staticmethod
+    def _compute_minhash(ds: Any, shingles: set[str], num_perm: int = 128) -> Any:
+        mh = ds.MinHash(num_perm=num_perm)
+        for s in shingles:
+            mh.update(s.encode("utf-8"))
+        return mh
 
     def _coerce_article(
         self, article: ArticleRecord | Mapping[str, Any]

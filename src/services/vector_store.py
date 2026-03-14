@@ -189,6 +189,73 @@ class VectorStore:
 
         return [self._serialize_scored_point(point) for point in points]
 
+    # ── Phase 3: Hybrid Search (sparse + dense) ──
+
+    async def query_hybrid_points(
+        self,
+        collection_name: str,
+        *,
+        query_vector: Sequence[float],
+        query_text: str = "",
+        limit: int = 10,
+        score_threshold: float | None = None,
+        with_payload: bool | Sequence[str] = True,
+        fusion: str = "rrf",
+    ) -> list[dict[str, Any]]:
+        client = self._require_client()
+        models = self._require_models()
+        values = [float(item) for item in query_vector]
+        if not values:
+            raise ValueError("query_vector must not be empty")
+
+        # Try Qdrant query_points with prefetch (v1.9+ hybrid)
+        if hasattr(client, "query_points") and hasattr(models, "Prefetch"):
+            try:
+                dense_prefetch = models.Prefetch(
+                    query=values,
+                    using="dense",
+                    limit=limit * 2,
+                )
+                prefetches = [dense_prefetch]
+                # Sparse prefetch only if text provided and sparse named vector exists
+                if query_text:
+                    try:
+                        sparse_prefetch = models.Prefetch(
+                            query=query_text,
+                            using="sparse",
+                            limit=limit * 2,
+                        )
+                        prefetches.append(sparse_prefetch)
+                    except Exception:
+                        pass
+
+                fusion_method = getattr(models.Fusion, fusion.upper(), None)
+                if fusion_method is None:
+                    fusion_method = getattr(models.Fusion, "RRF", None)
+
+                response = await client.query_points(
+                    collection_name=collection_name,
+                    prefetch=prefetches,
+                    query=fusion_method,
+                    limit=limit,
+                    with_payload=with_payload,
+                    with_vectors=False,
+                    score_threshold=score_threshold,
+                )
+                points = getattr(response, "points", response)
+                return [self._serialize_scored_point(p) for p in points]
+            except Exception:
+                pass
+
+        # Fallback: dense-only query
+        return await self.query_similar_points(
+            collection_name,
+            query_vector=values,
+            limit=limit,
+            score_threshold=score_threshold,
+            with_payload=with_payload,
+        )
+
     async def close(self) -> None:
         if self._client is None:
             return

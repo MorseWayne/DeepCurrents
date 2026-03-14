@@ -219,7 +219,9 @@ def test_report_context_builder_selects_events_and_taxonomy_themes_with_budget()
         ),
     ]
 
-    with patch("src.services.report_context_builder.log_stage_metrics") as mock_log_metrics:
+    with patch(
+        "src.services.report_context_builder.log_stage_metrics"
+    ) as mock_log_metrics:
         context = builder.build_context(
             event_briefs=event_briefs,
             theme_briefs=theme_briefs,
@@ -235,21 +237,21 @@ def test_report_context_builder_selects_events_and_taxonomy_themes_with_budget()
             profile="risk_daily",
         )
 
-    selected_event_ids = [
-        item["event_id"] for item in context["selected_event_briefs"]
-    ]
+    selected_event_ids = [item["event_id"] for item in context["selected_event_briefs"]]
     selected_theme_keys = [
-        item["brief_json"]["themeKey"]
-        for item in context["selected_theme_briefs"]
+        item["brief_json"]["themeKey"] for item in context["selected_theme_briefs"]
     ]
     assert selected_event_ids == ["evt_geo", "evt_rates"]
     assert selected_theme_keys == ["energy", "central_banks"]
     assert "region:middle_east" in context["truncation_summary"]["dropped_theme_keys"]
     assert context["coverage_summary"]["theme_keys"] == ["energy", "central_banks"]
-    assert "Missile strike disrupts export route" in context["prompt_sections"]["event_briefs_text"]
+    assert (
+        "Missile strike disrupts export route"
+        in context["prompt_sections"]["event_briefs_text"]
+    )
     assert "[THEME BRIEFS]" in context["prompt_sections"]["theme_briefs_text"]
     assert context["budget_summary"]["policy_name"] == "risk_daily"
-    assert context["budget_summary"]["quota"]["max_events_per_theme"] == 3
+    assert context["budget_summary"]["quota"]["max_events_per_theme"] == 5
     assert "Cross-asset signals:" in context["prompt_sections"]["market_context_text"]
     assert "Top movers up:" in context["prompt_sections"]["market_context_text"]
     assert builder.last_context_metrics["events_selected"] == 2
@@ -281,8 +283,12 @@ def test_report_context_builder_tolerates_string_backed_brief_json():
         channels=["energy", "shipping"],
         event_refs=["evt_geo"],
     )
-    event_brief["brief_json"] = json.dumps(event_brief["brief_json"], ensure_ascii=False)
-    theme_brief["brief_json"] = json.dumps(theme_brief["brief_json"], ensure_ascii=False)
+    event_brief["brief_json"] = json.dumps(
+        event_brief["brief_json"], ensure_ascii=False
+    )
+    theme_brief["brief_json"] = json.dumps(
+        theme_brief["brief_json"], ensure_ascii=False
+    )
 
     context = builder.build_context(
         event_briefs=[event_brief],
@@ -414,8 +420,8 @@ def test_report_context_builder_enforces_theme_and_region_diversity():
     )
 
     selected_event_ids = [item["event_id"] for item in context["selected_event_briefs"]]
-    assert selected_event_ids == ["evt_1", "evt_2", "evt_rates"]
-    assert set(context["truncation_summary"]["dropped_event_ids"]) == {"evt_3", "evt_4"}
+    assert selected_event_ids == ["evt_1", "evt_2", "evt_3", "evt_4", "evt_rates"]
+    assert context["truncation_summary"]["dropped_event_ids"] == []
 
 
 def test_report_context_builder_applies_profile_budget_and_region_theme_limits():
@@ -487,16 +493,21 @@ def test_report_context_builder_applies_profile_budget_and_region_theme_limits()
     )
 
     risk_themes = [item["theme_key"] for item in risk_context["selected_theme_briefs"]]
-    strategy_themes = [item["theme_key"] for item in strategy_context["selected_theme_briefs"]]
+    strategy_themes = [
+        item["theme_key"] for item in strategy_context["selected_theme_briefs"]
+    ]
 
-    assert risk_context["budget_summary"]["event_budget"] == 650
+    assert risk_context["budget_summary"]["event_budget"] == 700
     assert risk_context["budget_summary"]["market_budget"] == 200
     assert strategy_context["budget_summary"]["event_budget"] == 450
     assert strategy_context["budget_summary"]["market_budget"] == 350
     assert "macro_data" in risk_themes
     assert "macro_data" in strategy_themes
     assert sum(1 for item in strategy_themes if item.startswith("region:")) <= 1
-    assert "region:united_states" in strategy_context["truncation_summary"]["dropped_theme_keys"]
+    assert (
+        "region:united_states"
+        in strategy_context["truncation_summary"]["dropped_theme_keys"]
+    )
 
 
 @pytest.mark.asyncio

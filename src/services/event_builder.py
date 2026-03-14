@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import importlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, cast
 
 from ..config.settings import CONFIG
 from ..utils.text_similarity import (
@@ -160,6 +162,10 @@ RESOLUTION_MARKERS = {
     "复航",
 }
 
+_UNAVAILABLE = object()
+_hdbscan_module_cache: object | None = _UNAVAILABLE
+_cross_encoder_class_cache: object | None = _UNAVAILABLE
+
 
 class EventRepositoryLike(Protocol):
     async def list_recent_events(
@@ -199,6 +205,17 @@ class VectorStoreLike(Protocol):
         collection_name: str,
         *,
         query_vector: Sequence[float],
+        limit: int = 10,
+        score_threshold: float | None = None,
+        with_payload: bool | Sequence[str] = True,
+    ) -> list[dict[str, Any]]: ...
+
+    async def query_hybrid_points(
+        self,
+        collection_name: str,
+        *,
+        query_vector: Sequence[float],
+        query_text: str,
         limit: int = 10,
         score_threshold: float | None = None,
         with_payload: bool | Sequence[str] = True,
@@ -247,6 +264,9 @@ class EventBuilder:
         self.semantic_score_threshold = semantic_score_threshold
         self.semantic_limit = semantic_limit
         self.vector_collection = vector_collection
+        self._reranker_model = CONFIG.event_intelligence_reranker_model
+        self._cross_encoder: object | None = None
+        self._hdbscan_clusterer: object | None = None
 
     async def assign_article_to_event(
         self,
@@ -556,12 +576,38 @@ class EventBuilder:
         ):
             return {}
 
-        points = await self.vector_store.query_similar_points(
-            self.vector_collection,
-            query_vector=[float(item) for item in embedding],
-            limit=self.semantic_limit,
-            score_threshold=self.semantic_score_threshold,
-            with_payload=True,
+        query_vector = [self._safe_float(item) for item in embedding]
+        # Phase 3: prefer hybrid search (sparse+dense) with RRF fusion
+        query_text = self._text(extracted_features.get("embedding_input", ""))
+        if hasattr(self.vector_store, "query_hybrid_points") and query_text:
+            try:
+                points = await self.vector_store.query_hybrid_points(
+                    self.vector_collection,
+                    query_vector=query_vector,
+                    query_text=query_text,
+                    limit=self.semantic_limit,
+                    score_threshold=self.semantic_score_threshold,
+                    with_payload=True,
+                )
+            except Exception:
+                points = await self.vector_store.query_similar_points(
+                    self.vector_collection,
+                    query_vector=query_vector,
+                    limit=self.semantic_limit,
+                    score_threshold=self.semantic_score_threshold,
+                    with_payload=True,
+                )
+        else:
+            points = await self.vector_store.query_similar_points(
+                self.vector_collection,
+                query_vector=query_vector,
+                limit=self.semantic_limit,
+                score_threshold=self.semantic_score_threshold,
+                with_payload=True,
+            )
+        points = await self._rerank_semantic_points(
+            query_text=self._text(extracted_features.get("embedding_input", "")),
+            points=points,
         )
         scores: dict[str, float] = {}
         for point in points:
@@ -607,6 +653,7 @@ class EventBuilder:
         candidate_regions: set[str] = set()
         candidate_actions: set[str] = self._action_groups_from_text(candidate_title)
         candidate_risk_markers: set[str] = self._risk_markers_from_text(candidate_title)
+        member_vectors: list[list[float]] = []
 
         member_ids: list[str] = []
         for member in current_members:
@@ -623,39 +670,53 @@ class EventBuilder:
             candidate_regions.update(self._extract_regions(article_row, feature_row))
             candidate_actions.update(self._extract_action_groups(article_row))
             candidate_risk_markers.update(self._extract_risk_markers(article_row))
+            member_vector = self._extract_embedding_vector(feature_row)
+            if member_vector:
+                member_vectors.append(member_vector)
 
         entity_overlap = self._overlap_ratio(article_entities, candidate_entities)
         region_overlap = self._overlap_ratio(article_regions, candidate_regions)
         new_entity_count = len(article_entities - candidate_entities)
         new_region_count = len(article_regions - candidate_regions)
-        risk_signal_delta = float(
-            len(article_risk_markers - candidate_risk_markers)
-        )
+        risk_signal_delta = float(len(article_risk_markers - candidate_risk_markers))
         semantic_support = max(
             (semantic_scores.get(article_id, 0.0) for article_id in member_ids),
             default=0.0,
         )
+        article_vector = self._extract_embedding_vector(extracted_features)
+        cluster_cohesion = await self._cluster_support_score(
+            article_vector, member_vectors
+        )
         support_score = round(
             (
-                title_similarity * 0.4
-                + max(entity_overlap, region_overlap) * 0.25
-                + semantic_support * 0.35
+                title_similarity * 0.35
+                + max(entity_overlap, region_overlap) * 0.2
+                + semantic_support * 0.3
+                + cluster_cohesion * 0.15
             ),
             3,
         )
         confidence = round(
             (
-                title_similarity * 0.35
-                + semantic_support * 0.3
+                title_similarity * 0.32
+                + semantic_support * 0.26
                 + entity_overlap * 0.2
                 + region_overlap * 0.05
                 + time_proximity * 0.1
+                + cluster_cohesion * 0.07
             ),
             3,
         )
-        conflict_reason = self._detect_action_conflict(article_actions, candidate_actions)
-        if title_similarity >= self.title_similarity_threshold and time_proximity >= 0.5:
-            confidence = max(confidence, round(title_similarity * 0.7 + time_proximity * 0.3, 3))
+        conflict_reason = self._detect_action_conflict(
+            article_actions, candidate_actions
+        )
+        if (
+            title_similarity >= self.title_similarity_threshold
+            and time_proximity >= 0.5
+        ):
+            confidence = max(
+                confidence, round(title_similarity * 0.7 + time_proximity * 0.3, 3)
+            )
         if conflict_reason:
             confidence = round(max(0.0, confidence - 0.4), 3)
 
@@ -667,12 +728,15 @@ class EventBuilder:
             "time_proximity": round(time_proximity, 3),
             "support_score": support_score,
             "confidence": confidence,
+            "cluster_cohesion": round(cluster_cohesion, 3),
             "new_entity_count": new_entity_count,
             "new_region_count": new_region_count,
             "risk_signal_delta": round(risk_signal_delta, 3),
             "resolution_signal": resolution_signal,
             "semantic_hit_count": sum(
-                1 for article_id in member_ids if semantic_scores.get(article_id, 0.0) > 0
+                1
+                for article_id in member_ids
+                if semantic_scores.get(article_id, 0.0) > 0
             ),
             "conflict": bool(conflict_reason),
             "conflict_reason": conflict_reason,
@@ -686,11 +750,13 @@ class EventBuilder:
         feature_cache: dict[str, dict[str, Any] | None],
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         if article_id not in article_cache:
-            article_cache[article_id] = await self.article_repository.get_article(article_id)
-        if article_id not in feature_cache:
-            feature_cache[article_id] = await self.article_repository.get_article_features(
+            article_cache[article_id] = await self.article_repository.get_article(
                 article_id
             )
+        if article_id not in feature_cache:
+            feature_cache[
+                article_id
+            ] = await self.article_repository.get_article_features(article_id)
         return dict(article_cache[article_id] or {}), feature_cache[article_id]
 
     async def _estimate_source_count(
@@ -758,8 +824,13 @@ class EventBuilder:
         merge_signals: Mapping[str, Any],
         decision: EventStateDecision | None,
     ) -> dict[str, Any]:
-        base_metadata = event.get("metadata") if isinstance(event.get("metadata"), Mapping) else {}
-        metadata = dict(base_metadata)
+        raw_metadata = event.get("metadata")
+        if isinstance(raw_metadata, Mapping):
+            metadata: dict[str, Any] = {
+                self._text(key): value for key, value in raw_metadata.items()
+            }
+        else:
+            metadata = {}
         metadata.update(
             {
                 "last_article_id": article_id,
@@ -777,7 +848,9 @@ class EventBuilder:
             }
         return self._normalize_metadata(metadata)
 
-    def _compact_merge_signals(self, merge_signals: Mapping[str, Any]) -> dict[str, Any]:
+    def _compact_merge_signals(
+        self, merge_signals: Mapping[str, Any]
+    ) -> dict[str, Any]:
         return {
             "confidence": round(self._safe_float(merge_signals.get("confidence")), 3),
             "title_similarity": round(
@@ -800,12 +873,8 @@ class EventBuilder:
                 self._safe_float(merge_signals.get("time_proximity")),
                 3,
             ),
-            "new_entity_count": self._safe_int(
-                merge_signals.get("new_entity_count")
-            ),
-            "new_region_count": self._safe_int(
-                merge_signals.get("new_region_count")
-            ),
+            "new_entity_count": self._safe_int(merge_signals.get("new_entity_count")),
+            "new_region_count": self._safe_int(merge_signals.get("new_region_count")),
             "risk_signal_delta": round(
                 self._safe_float(merge_signals.get("risk_signal_delta")),
                 3,
@@ -881,7 +950,9 @@ class EventBuilder:
             for part in (
                 self._text(article.get("title")),
                 self._text(article.get("normalized_title")),
-                self._text(article.get("clean_content") or article.get("content"))[:500],
+                self._text(article.get("clean_content") or article.get("content"))[
+                    :500
+                ],
             )
             if part
         )
@@ -912,6 +983,138 @@ class EventBuilder:
                 if opposite in candidate_actions:
                     return f"{action}_vs_{opposite}"
         return ""
+
+    async def _rerank_semantic_points(
+        self,
+        *,
+        query_text: str,
+        points: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not query_text or not points:
+            return list(points)
+        model = await self._ensure_cross_encoder()
+        if model is None:
+            return list(points)
+
+        pairs: list[tuple[str, str]] = []
+        valid_indices: list[int] = []
+        for idx, point in enumerate(points):
+            payload = point.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            candidate_text = self._text(
+                payload.get("embedding_input")
+                or payload.get("normalized_title")
+                or payload.get("title")
+            )
+            if not candidate_text:
+                continue
+            pairs.append((query_text, candidate_text[:400]))
+            valid_indices.append(idx)
+        if not pairs:
+            return list(points)
+
+        loop = asyncio.get_running_loop()
+        try:
+            raw_scores = await loop.run_in_executor(
+                None,
+                lambda: model.predict(pairs, convert_to_numpy=False),
+            )
+        except Exception:
+            return list(points)
+
+        reranked = [dict(point) for point in points]
+        for idx, rerank_score in zip(valid_indices, raw_scores, strict=False):
+            base_score = self._safe_float(reranked[idx].get("score"))
+            rerank_score_f = self._safe_float(rerank_score)
+            fused = 0.55 * base_score + 0.45 * rerank_score_f
+            reranked[idx]["score"] = round(fused, 6)
+
+        reranked.sort(key=lambda p: self._safe_float(p.get("score")), reverse=True)
+        return reranked
+
+    async def _cluster_support_score(
+        self,
+        article_vector: list[float],
+        member_vectors: Sequence[list[float]],
+    ) -> float:
+        if not article_vector or len(member_vectors) < 2:
+            return 0.0
+        clusterer = await self._ensure_hdbscan_clusterer()
+        if clusterer is None:
+            return 0.0
+
+        vectors = [article_vector, *member_vectors]
+        loop = asyncio.get_running_loop()
+        try:
+            labels_obj = await loop.run_in_executor(
+                None, lambda: clusterer.fit_predict(vectors)
+            )
+        except Exception:
+            return 0.0
+
+        labels = list(labels_obj)
+        if not labels:
+            return 0.0
+        article_label = self._safe_int(labels[0])
+        if article_label < 0:
+            return 0.0
+        member_labels = [
+            self._safe_int(label) for label in labels[1:] if self._safe_int(label) >= 0
+        ]
+        if not member_labels:
+            return 0.0
+        aligned = sum(1 for label in member_labels if label == article_label)
+        return round(aligned / len(member_labels), 3)
+
+    async def _ensure_cross_encoder(self) -> Any | None:
+        if self._cross_encoder is not None:
+            return self._cross_encoder
+        cls = _load_cross_encoder_class()
+        if cls is None:
+            return None
+        cls_obj = cast(Any, cls)
+        try:
+            loop = asyncio.get_running_loop()
+            self._cross_encoder = await loop.run_in_executor(
+                None,
+                lambda: cls_obj(self._reranker_model),
+            )
+        except Exception:
+            self._cross_encoder = None
+        return self._cross_encoder
+
+    async def _ensure_hdbscan_clusterer(self) -> Any | None:
+        if self._hdbscan_clusterer is not None:
+            return self._hdbscan_clusterer
+        module = _load_hdbscan_module()
+        if module is None:
+            return None
+        module_obj = cast(Any, module)
+        try:
+            self._hdbscan_clusterer = module_obj.HDBSCAN(
+                min_cluster_size=2,
+                metric="euclidean",
+                prediction_data=False,
+            )
+        except Exception:
+            self._hdbscan_clusterer = None
+        return self._hdbscan_clusterer
+
+    def _extract_embedding_vector(
+        self,
+        feature_row: Mapping[str, Any] | None,
+    ) -> list[float]:
+        if not isinstance(feature_row, Mapping):
+            return []
+        embedding = feature_row.get("embedding")
+        if (
+            not isinstance(embedding, Sequence)
+            or isinstance(embedding, (str, bytes))
+            or not embedding
+        ):
+            return []
+        return [self._safe_float(item) for item in embedding]
 
     def _overlap_ratio(self, left: set[str], right: set[str]) -> float:
         if not left or not right:
@@ -1066,3 +1269,24 @@ class EventBuilder:
 
 
 __all__ = ["EventBuilder"]
+
+
+def _load_hdbscan_module() -> object | None:
+    global _hdbscan_module_cache
+    if _hdbscan_module_cache is _UNAVAILABLE:
+        try:
+            _hdbscan_module_cache = importlib.import_module("hdbscan")
+        except Exception:
+            _hdbscan_module_cache = None
+    return _hdbscan_module_cache
+
+
+def _load_cross_encoder_class() -> object | None:
+    global _cross_encoder_class_cache
+    if _cross_encoder_class_cache is _UNAVAILABLE:
+        try:
+            module = importlib.import_module("sentence_transformers")
+            _cross_encoder_class_cache = getattr(module, "CrossEncoder", None)
+        except Exception:
+            _cross_encoder_class_cache = None
+    return _cross_encoder_class_cache

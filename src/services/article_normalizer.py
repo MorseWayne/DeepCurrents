@@ -211,6 +211,14 @@ def _build_article_id(canonical_url: str) -> str:
     return f"art_{digest[:16]}"
 
 
+def _content_quality_tier(content_length: int) -> str:
+    if content_length < 200:
+        return "low"
+    if content_length < 800:
+        return "medium"
+    return "high"
+
+
 def _quality_score(
     title: str, clean_content: str, published_at: datetime | None
 ) -> float:
@@ -265,9 +273,13 @@ class ArticleNormalizer:
         exact_hash = _build_exact_hash(title, clean_content)
         simhash = _build_simhash(normalized_title, clean_content)
 
+        content_len = len(clean_content or content)
+        content_quality = _content_quality_tier(content_len)
+
         record_metadata = dict(metadata)
         if raw.get("source") and "source" not in record_metadata:
             record_metadata["source"] = raw.get("source")
+        record_metadata["content_quality"] = content_quality
 
         return ArticleRecord(
             article_id=_build_article_id(canonical_url),
@@ -284,7 +296,7 @@ class ArticleNormalizer:
             source_type=source_type,
             exact_hash=exact_hash,
             simhash=simhash,
-            content_length=len(clean_content or content),
+            content_length=content_len,
             quality_score=_quality_score(title, clean_content, published_at),
             metadata=record_metadata,
         )
