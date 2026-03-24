@@ -346,3 +346,60 @@ def _text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value).strip()
+
+
+from .indicators import macd as _macd, rsi as _rsi, boll as _boll
+
+
+async def get_asset_technical_analysis(symbol: str, days: int = 30) -> dict:
+    """异步计算资产技术指标，供 AI 上下文注入使用。
+
+    yfinance.download 是同步阻塞调用，使用 run_in_executor 包装。
+    返回 dict：rsi_14, macd_hist, boll_upper, boll_mid, boll_lower
+    """
+    import asyncio
+
+    def _compute():
+        import yfinance as yf
+        df = yf.download(symbol, period=f"{days}d", progress=False, auto_adjust=True)
+        if df.empty:
+            raise ValueError(f"No price data for {symbol}")
+
+        close = df["Close"].squeeze()
+        rsi_series = _rsi(close, 14)
+        rsi_val = rsi_series.iloc[-1]
+        macd_df = _macd(close)
+        boll_df = _boll(close, 20)
+
+        # RSI is NaN when avg_loss == 0 (all gains → RSI = 100) or avg_gain == 0 (all losses → RSI = 0)
+        if _is_nan(rsi_val):
+            delta = close.diff()
+            loss = (-delta.where(delta < 0, 0.0)).sum()
+            gain = delta.where(delta > 0, 0.0).sum()
+            if loss == 0 and gain > 0:
+                rsi_out = 100.0  # pure uptrend
+            elif gain == 0 and loss > 0:
+                rsi_out = 0.0   # pure downtrend
+            else:
+                rsi_out = None  # ambiguous NaN
+        else:
+            rsi_out = round(float(rsi_val), 2)
+
+        return {
+            "rsi_14": rsi_out,
+            "macd_hist": round(float(macd_df["macd_hist"].iloc[-1]), 4),
+            "boll_upper": round(float(boll_df["boll_upper"].iloc[-1]), 4),
+            "boll_mid":   round(float(boll_df["boll_mid"].iloc[-1]), 4),
+            "boll_lower": round(float(boll_df["boll_lower"].iloc[-1]), 4),
+        }
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _compute)
+
+
+def _is_nan(v) -> bool:
+    try:
+        import math
+        return math.isnan(float(v))
+    except (TypeError, ValueError):
+        return True

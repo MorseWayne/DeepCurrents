@@ -67,3 +67,29 @@ def test_render_market_context_snapshot_is_prompt_friendly():
     assert "Top movers up: CL=F (+1.40%)" in rendered
     assert "Top movers down: ^GSPC (-0.90%)" in rendered
     assert "Cross-asset signals:" in rendered
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_get_asset_technical_analysis_shape():
+    """get_asset_technical_analysis should return dict with rsi_14 / macd / boll keys"""
+    import pandas as pd
+    from unittest.mock import patch, MagicMock
+
+    mock_df = pd.DataFrame({
+        "Close": list(range(1, 35)),
+        "High":  list(range(2, 36)),
+        "Low":   list(range(0, 34)),
+        "Volume": [1000] * 34,
+    })
+
+    with patch("yfinance.download", return_value=mock_df):
+        from src.utils.market_data import get_asset_technical_analysis
+        result = await get_asset_technical_analysis("SPY", days=34)
+
+    assert "rsi_14" in result
+    assert "macd_hist" in result
+    assert "boll_upper" in result
+    assert isinstance(result["rsi_14"], float)
