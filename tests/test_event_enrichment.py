@@ -195,3 +195,37 @@ async def test_event_enrichment_query_reuses_stored_enrichment_without_recomputi
 
     assert enrichment == {"event_type": "macro_data", "regions": []}
     assert event_repo.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_enrich_event_sentiment_no_assets():
+    """事件无关联资产时，情绪评分应为 None"""
+    from src.services.event_enrichment import enrich_event_sentiment
+
+    event = {"assets": [], "id": "e1"}
+    result = await enrich_event_sentiment(event, av_service=None)
+    assert result.get("sentiment_score") is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_event_sentiment_with_score():
+    """正常路径：有 assets 且 AV 返回数据时，sentiment_score 为浮点数"""
+    from src.services.alpha_vantage_service import (
+        AlphaVantageService, NewsArticleSentiment
+    )
+    from src.services.event_enrichment import enrich_event_sentiment
+    from unittest.mock import AsyncMock
+
+    mock_av = AsyncMock(spec=AlphaVantageService)
+    mock_av.get_news_sentiment.return_value = [
+        NewsArticleSentiment(
+            title="T", url="u", source="s", published="",
+            ticker="SPY", sentiment_score=0.6, relevance=1.0
+        )
+    ]
+
+    event = {"assets": ["SPY", "QQQ"], "id": "e2"}
+    result = await enrich_event_sentiment(event, av_service=mock_av)
+
+    assert abs(result["sentiment_score"] - 0.6) < 0.01
+    assert result["sentiment_label"] == "bullish"

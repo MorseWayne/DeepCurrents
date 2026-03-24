@@ -776,4 +776,49 @@ class EventEnrichmentService:
         return str(value).strip()
 
 
-__all__ = ["EventEnrichmentService"]
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .alpha_vantage_service import AlphaVantageService
+
+
+def _score_to_label(score: float) -> str:
+    if score >= 0.15:
+        return "bullish"
+    if score <= -0.15:
+        return "bearish"
+    return "neutral"
+
+
+async def enrich_event_sentiment(
+    event: dict,
+    *,
+    av_service: "AlphaVantageService | None",
+) -> dict:
+    """为事件注入 sentiment_score / sentiment_label。
+
+    取事件关联资产列表中第一个 ticker，查询 Alpha Vantage；
+    无 assets 或无 API key 时 sentiment_score = None。
+    返回原 event dict（in-place 修改）。
+    """
+    assets: list[str] = event.get("assets") or []
+    if not assets or av_service is None:
+        event.setdefault("sentiment_score", None)
+        event.setdefault("sentiment_label", "neutral")
+        return event
+
+    from .alpha_vantage_service import aggregate_sentiment
+
+    ticker = assets[0]
+    try:
+        articles = await av_service.get_news_sentiment(ticker, days=3)
+        score = aggregate_sentiment(articles) if articles else None
+    except Exception as exc:
+        logger.warning(f"Sentiment enrichment failed for {ticker}: {exc}")
+        score = None
+
+    event["sentiment_score"] = round(score, 4) if score is not None else None
+    event["sentiment_label"] = _score_to_label(score) if score is not None else "neutral"
+    return event
+
+
+__all__ = ["EventEnrichmentService", "enrich_event_sentiment"]
