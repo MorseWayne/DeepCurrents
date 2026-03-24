@@ -55,6 +55,10 @@ class Settings(BaseSettings):
         default="src/config/asset_symbols.json", validation_alias="ASSET_SYMBOLS_FILE"
     )
 
+    # ── Alpha Vantage ──
+    alpha_vantage_api_key: str = Field(default="", validation_alias="ALPHA_VANTAGE_API_KEY")
+    alpha_vantage_cache_ttl_s: int = Field(default=3600, validation_alias="ALPHA_VANTAGE_CACHE_TTL_S")
+
     # ── Event Intelligence Runtime ──
     event_intelligence_enabled: bool = Field(
         default=False, validation_alias="EVENT_INTELLIGENCE_ENABLED"
