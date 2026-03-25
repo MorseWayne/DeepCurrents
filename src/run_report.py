@@ -132,6 +132,21 @@ async def run_report(args):
             print(output_text)
             print("=" * 50)
 
+        if args.format in ("docx", "pdf"):
+            from src.services.report_exporter import ReportExporter
+            exporter = ReportExporter()
+            # Determine base path: strip extension from --output if provided, else use date
+            base = args.output.rsplit(".", 1)[0] if args.output else f"data/reports/{report.date}"
+            if args.format == "docx":
+                path = exporter.export_word(output_text, f"{base}.docx")
+                print(f"Word report saved: {path}")
+            elif args.format == "pdf":
+                path = exporter.export_pdf(output_text, f"{base}.pdf")
+                if path:
+                    print(f"PDF report saved: {path}")
+                else:
+                    print("PDF export failed (wkhtmltopdf not installed?)")
+
     except Exception as e:
         logger.error(f"手动生成研报失败: {e}")
     finally:
@@ -170,6 +185,12 @@ def main():
     )
     parser.add_argument("--json", action="store_true", help="以 JSON 格式输出")
     parser.add_argument("--output", "-o", type=str, help="将输出保存到指定文件")
+    parser.add_argument(
+        "--format",
+        choices=["md", "docx", "pdf"],
+        default="md",
+        help="Output format: md (default), docx, or pdf",
+    )
 
     args = parser.parse_args()
     if args.events_only:
