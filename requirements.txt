@@ -38,3 +38,7 @@ sentence-transformers>=3.0.0
 # ── Phase 5: LangGraph Orchestration ──
 langgraph>=0.2.0
 langchain-core>=0.3.0
+# ── Phase 6: Report Export ──
+python-docx>=0.8.11
+markdown>=3.4.0
+pdfkit>=1.0.0
