@@ -184,6 +184,18 @@ class ReportOrchestrator:
             f"themes={len(self._sequence_of_mappings(context_package.get('selected_theme_briefs')))}"
         )
 
+        # ── LangGraph 路径 (可通过 USE_LANGGRAPH=true 开启) ──
+        from ..config.settings import CONFIG
+        if getattr(CONFIG, "use_langgraph", False):
+            return await self._generate_via_langgraph(
+                context_package=context_package,
+                combined_context_text=combined_context_text,
+                market_context_text=market_context_text,
+                resolved_report_date=resolved_report_date,
+                profile=profile,
+                version=version,
+            )
+
         macro_out, sentiment_out = await self._run_parallel_analysts(
             macro_input=macro_input,
             sentiment_input=sentiment_input,
@@ -1078,6 +1090,51 @@ class ReportOrchestrator:
         if isinstance(value, str):
             return value.strip()
         return str(value).strip()
+
+    async def _generate_via_langgraph(
+        self,
+        *,
+        context_package: dict,
+        combined_context_text: str,
+        market_context_text: str,
+        resolved_report_date,
+        profile: str,
+        version: str | None,
+    ) -> DailyReport | None:
+        from .langgraph_orchestrator import build_report_workflow
+        from .agent_state import AgentState
+
+        workflow = build_report_workflow(self.ai_service)
+
+        initial_state: AgentState = {
+            "events": list(self._sequence_of_mappings(context_package.get("selected_event_briefs"))),
+            "themes": list(self._sequence_of_mappings(context_package.get("selected_theme_briefs"))),
+            "combined_context_text": combined_context_text,
+            "market_context_text": market_context_text,
+            "macro_output": None,
+            "sentiment_output": None,
+            "strategist_output": None,
+            "risk_manager_output": None,
+            "final_report_json": None,
+            "errors": [],
+            "retry_count": 0,
+        }
+
+        result = await workflow.ainvoke(initial_state)
+
+        if result.get("errors"):
+            for err in result["errors"]:
+                logger.warning(f"LangGraph agent error: {err}")
+
+        report_json = result.get("final_report_json")
+        if not report_json:
+            logger.error("LangGraph workflow produced no report")
+            return None
+
+        report = DailyReport(**report_json)
+        report.date = resolved_report_date.isoformat()
+        self.last_context_package = dict(context_package)
+        return report
 
 
 def estimate_tokens(text: str) -> int:
