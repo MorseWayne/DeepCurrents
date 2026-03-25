@@ -42,3 +42,7 @@ langchain-core>=0.3.0
 python-docx>=0.8.11
 markdown>=3.4.0
 pdfkit>=1.0.0
+# ── Phase 7: Web Interface ──
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+sse-starlette>=1.0.0
