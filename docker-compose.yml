@@ -115,6 +115,43 @@ services:
     networks:
       - deepcurrents-net
 
+  api:
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+    container_name: deep-currents-api
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /app
+      EVENT_INTELLIGENCE_POSTGRES_DSN: postgresql://postgres:postgres@postgres:5432/deepcurrents
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - deepcurrents-net
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: deep-currents-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    networks:
+      - deepcurrents-net
+
 networks:
   deepcurrents-net:
     driver: bridge
