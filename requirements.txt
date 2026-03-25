@@ -35,3 +35,6 @@ transformers>=4.40.0
 # ── Phase 4: Advanced Capabilities ──
 hdbscan>=0.8.33
 sentence-transformers>=3.0.0
+# ── Phase 5: LangGraph Orchestration ──
+langgraph>=0.2.0
+langchain-core>=0.3.0
